@@ -1,0 +1,307 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  active
+  muted
+  banned
+  deleted
+}
+
+enum UserRole {
+  user
+  moderator
+  admin
+}
+
+enum ChannelType {
+  language
+  age
+  region
+  general
+}
+
+enum ChannelVisibility {
+  public
+  private
+}
+
+enum MessageStatus {
+  active
+  deleted
+  hidden
+  flagged
+}
+
+enum ConnectionStatus {
+  pending
+  accepted
+  rejected
+  cancelled
+  blocked
+}
+
+enum ReportStatus {
+  open
+  reviewing
+  resolved
+  rejected
+}
+
+enum ReportReason {
+  spam
+  harassment
+  hate_or_abuse
+  sexual_content
+  fake_profile
+  underage_safety
+  other
+}
+
+enum BannedWordSeverity {
+  low
+  medium
+  high
+}
+
+model User {
+  id                String             @id @default(uuid()) @db.Uuid
+  status            UserStatus         @default(active)
+  role              UserRole           @default(user)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lastLoginAt       DateTime?          @map("last_login_at") @db.Timestamptz(6)
+  identities        AuthIdentity[]
+  sessions          Session[]
+  profile           Profile?
+  channelMessages   ChannelMessage[]   @relation("ChannelMessageSender")
+  deletedMessages   ChannelMessage[]   @relation("ChannelMessageDeletedBy")
+  connectionsSent   Connection[]       @relation("ConnectionRequester")
+  connectionsGot    Connection[]       @relation("ConnectionReceiver")
+  conversationLinks ConversationMember[]
+  directMessages    DirectMessage[]
+  reportsMade       Report[]           @relation("ReportReporter")
+  reportsAgainst    Report[]           @relation("ReportTargetUser")
+  reviewedReports   Report[]           @relation("ReportReviewer")
+  blocksMade        Block[]            @relation("BlockBlocker")
+  blocksReceived    Block[]            @relation("BlockBlocked")
+
+  @@map("users")
+}
+
+model AuthIdentity {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @map("user_id") @db.Uuid
+  provider            String
+  providerUserId      String   @map("provider_user_id")
+  providerEmail       String?  @map("provider_email")
+  providerDisplayName String?  @map("provider_display_name")
+  providerAvatarUrl   String?  @map("provider_avatar_url")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@map("auth_identities")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @map("refresh_token_hash")
+  ipAddress        String?   @map("ip_address")
+  userAgent        String?   @map("user_agent")
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Profile {
+  userId          String   @id @map("user_id") @db.Uuid
+  username        String   @unique
+  displayName     String   @map("display_name")
+  avatarUrl       String?  @map("avatar_url")
+  bio             String?
+  dob             DateTime? @db.Date
+  ageGroup        String?  @map("age_group")
+  gender          String?
+  region          String?
+  city            String?
+  primaryLanguage String?  @map("primary_language")
+  languages       String[]
+  isComplete      Boolean  @default(false) @map("is_complete")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([displayName])
+  @@index([region])
+  @@index([ageGroup])
+  @@map("profiles")
+}
+
+model Channel {
+  id        String           @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String           @unique
+  type      ChannelType
+  visibility ChannelVisibility @default(public)
+  isDefault Boolean          @default(false) @map("is_default")
+  isActive  Boolean          @default(true) @map("is_active")
+  sortOrder Int              @default(0) @map("sort_order")
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  messages  ChannelMessage[]
+
+  @@map("channels")
+}
+
+model ChannelMessage {
+  id        String        @id @default(uuid()) @db.Uuid
+  channelId String        @map("channel_id") @db.Uuid
+  senderId  String        @map("sender_id") @db.Uuid
+  body      String
+  status    MessageStatus @default(active)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  deletedBy String?       @map("deleted_by") @db.Uuid
+  channel   Channel       @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  sender    User          @relation("ChannelMessageSender", fields: [senderId], references: [id])
+  deleter   User?         @relation("ChannelMessageDeletedBy", fields: [deletedBy], references: [id])
+  reports   Report[]
+
+  @@index([channelId, createdAt(sort: Desc)])
+  @@index([senderId])
+  @@index([createdAt])
+  @@map("channel_messages")
+}
+
+model Connection {
+  id          String           @id @default(uuid()) @db.Uuid
+  requesterId String           @map("requester_id") @db.Uuid
+  receiverId  String           @map("receiver_id") @db.Uuid
+  userLowId   String           @map("user_low_id") @db.Uuid
+  userHighId  String           @map("user_high_id") @db.Uuid
+  status      ConnectionStatus
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  requester   User             @relation("ConnectionRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  receiver    User             @relation("ConnectionReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([userLowId, userHighId])
+  @@index([requesterId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("connections")
+}
+
+model Conversation {
+  id        String               @id @default(uuid()) @db.Uuid
+  type      String               @default("direct")
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  members   ConversationMember[]
+  messages  DirectMessage[]
+
+  @@map("conversations")
+}
+
+model ConversationMember {
+  conversationId String       @map("conversation_id") @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  @@map("conversation_members")
+}
+
+model DirectMessage {
+  id             String        @id @default(uuid()) @db.Uuid
+  conversationId String        @map("conversation_id") @db.Uuid
+  senderId       String        @map("sender_id") @db.Uuid
+  body           String
+  status         MessageStatus @default(active)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt      DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User          @relation(fields: [senderId], references: [id])
+  reports        Report[]
+
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([senderId])
+  @@map("direct_messages")
+}
+
+model Report {
+  id                     String          @id @default(uuid()) @db.Uuid
+  reporterId             String          @map("reporter_id") @db.Uuid
+  targetUserId           String?         @map("target_user_id") @db.Uuid
+  targetChannelMessageId String?         @map("target_channel_message_id") @db.Uuid
+  targetDirectMessageId  String?         @map("target_direct_message_id") @db.Uuid
+  reason                 ReportReason
+  details                String?
+  status                 ReportStatus    @default(open)
+  createdAt              DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  reviewedBy             String?         @map("reviewed_by") @db.Uuid
+  reviewedAt             DateTime?       @map("reviewed_at") @db.Timestamptz(6)
+  reporter               User            @relation("ReportReporter", fields: [reporterId], references: [id])
+  targetUser             User?           @relation("ReportTargetUser", fields: [targetUserId], references: [id])
+  channelMessage         ChannelMessage? @relation(fields: [targetChannelMessageId], references: [id])
+  directMessage          DirectMessage?  @relation(fields: [targetDirectMessageId], references: [id])
+  reviewer               User?           @relation("ReportReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([status])
+  @@index([reporterId])
+  @@map("reports")
+}
+
+model Block {
+  id            String   @id @default(uuid()) @db.Uuid
+  blockerId     String   @map("blocker_id") @db.Uuid
+  blockedUserId String   @map("blocked_user_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  blocker       User     @relation("BlockBlocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedUser   User     @relation("BlockBlocked", fields: [blockedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedUserId])
+  @@map("blocks")
+}
+
+model ModerationAction {
+  id              String   @id @default(uuid()) @db.Uuid
+  adminId         String   @map("admin_id") @db.Uuid
+  targetUserId    String?  @map("target_user_id") @db.Uuid
+  targetMessageId String?  @map("target_message_id") @db.Uuid
+  action          String
+  reason          String?
+  metadata        Json?
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([adminId])
+  @@index([targetUserId])
+  @@map("moderation_actions")
+}
+
+model BannedWord {
+  id        String             @id @default(uuid()) @db.Uuid
+  word      String             @unique
+  severity  BannedWordSeverity @default(medium)
+  isActive  Boolean            @default(true) @map("is_active")
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("banned_words")
+}

@@ -1,0 +1,614 @@
+# Social Chat App V1 - Frontend Product Documentation
+
+## 1. Project Summary
+
+This is an independent personal project.
+
+The product is a live social chat website where people can enter public live channels based on language, age group, region, and general topics. Guests can open the website and see live channel chats immediately, but they cannot send messages, view user profiles, use connections, or chat privately until they log in.
+
+Login in V1 must be done only through Facebook Authentication.
+
+## 2. V1 Goal
+
+The first release must support:
+
+- 50,000 logged-in/registered users.
+- 5,000 users chatting at the same time.
+- Public read-only live channel viewing for guests.
+- Logged-in live channel chat.
+- User profile page.
+- Connections page.
+- Connection request system.
+- One-to-one private chat only between accepted connections.
+- Facebook-only authentication.
+
+The first version must feel like a real social product, not a basic demo.
+
+## 3. Primary User Experience
+
+When a user opens the website, the app must open directly into the main social experience.
+
+The layout has three main tabs:
+
+1. Channels
+2. Connections
+3. Profile
+
+On desktop, these tabs appear on the left side as a sidebar.
+
+On mobile, these tabs should appear as a bottom navigation bar.
+
+By default, the website opens on the Channels tab and loads the first/default channel chat.
+
+## 4. Guest User Rules
+
+A guest user is someone who has not logged in with Facebook.
+
+Guest users can:
+
+- Open the website.
+- See the Channels tab by default.
+- See the list of public channels.
+- Open public channels.
+- Read public channel messages.
+- See a login prompt near the message input.
+
+Guest users cannot:
+
+- Send messages.
+- View any user's full profile.
+- Open the Connections page.
+- Send connection requests.
+- Accept connection requests.
+- Use one-to-one chat.
+- Edit profile.
+- See private user data.
+
+When a guest tries to do a restricted action, show a Facebook login prompt.
+
+Examples:
+
+- If guest clicks the message input: show "Login with Facebook to chat".
+- If guest clicks Connections: show login screen or login modal.
+- If guest clicks a user profile: show "Login with Facebook to view profiles".
+
+## 5. Logged-In User Rules
+
+A logged-in user is someone authenticated through Facebook.
+
+Logged-in users can:
+
+- Send messages in public channels.
+- Switch channels.
+- View allowed public user profile details.
+- Send connection requests.
+- Accept or reject connection requests.
+- Chat one-to-one with accepted connections.
+- Edit their own profile.
+- Upload or update profile photo if allowed.
+- Block users.
+- Report users.
+- Report messages.
+- Logout.
+
+Logged-in users cannot:
+
+- Reply to a specific channel message in V1.
+- Create custom channels in V1.
+- Send private messages to users who are not accepted connections.
+- View private data such as Facebook ID, email, phone, DOB, or login metadata.
+
+## 6. Authentication UX
+
+V1 authentication must use Facebook Authentication only.
+
+There must be no password login, email login, OTP login, Google login, Apple login, or manual signup in V1.
+
+Frontend requirements:
+
+- Show a "Continue with Facebook" button.
+- Use Facebook OAuth through the backend.
+- Never directly trust Facebook user data only on the frontend.
+- After Facebook login completes, backend returns app session tokens.
+- Store the access token securely according to the selected frontend/backend strategy.
+- If using httpOnly cookies, frontend should not store JWT in localStorage.
+- If using bearer tokens, use short-lived access tokens and refresh flow.
+
+Recommended flow:
+
+1. User clicks "Continue with Facebook".
+2. Frontend redirects to backend endpoint: `/auth/facebook`.
+3. Backend redirects user to Facebook.
+4. Facebook redirects back to backend callback.
+5. Backend creates or finds the user.
+6. Backend redirects frontend to `/auth/callback/success`.
+7. Frontend loads the logged-in session.
+
+## 7. Main Layout
+
+Desktop layout:
+
+- Left sidebar: Channels, Connections, Profile.
+- Main content area: active channel or active page.
+- Optional right panel on large screens for channel information or login/profile summary.
+
+Mobile layout:
+
+- Main content takes full screen.
+- Bottom navigation: Channels, Connections, Profile.
+- Chat input stays at bottom of chat screen.
+- Channel list can open as a sheet/drawer.
+
+The app must be mobile-first because the target audience will mostly use phones.
+
+## 8. Channels Page
+
+The Channels page is the default page.
+
+It must include:
+
+- Channel list.
+- Active channel header.
+- Live message area.
+- Message input area.
+- Online count if available.
+- Login prompt for guests.
+
+Default behavior:
+
+- When a guest or logged-in user opens `/`, load the default first channel.
+- The default channel should be controlled by backend config, not hardcoded in frontend.
+- If default channel is unavailable, load the first active public channel returned by the backend.
+
+Channel types:
+
+- Language channels.
+- Age group channels.
+- Region channels.
+- General topic channels.
+
+Example channels:
+
+- Hindi
+- English
+- Tamil
+- Telugu
+- Bengali
+- Marathi
+- 18-21
+- 22-25
+- Delhi
+- Mumbai
+- Gaming
+- Study
+- Music
+- Jobs
+- Friendship
+
+## 9. Channel Chat UX
+
+Messages must appear in real time.
+
+Each channel message should show:
+
+- Sender display name.
+- Sender avatar or placeholder.
+- Message body.
+- Message time.
+- Optional verified/admin/moderator badge if supported.
+
+V1 must not include:
+
+- Reply to message.
+- Threaded replies.
+- Message likes.
+- Message reactions.
+- Voice messages.
+- Video messages.
+- File attachments.
+- User-created public channels.
+
+Users can only drop/send normal text messages.
+
+## 10. Message Input Rules
+
+Guest state:
+
+- Input should be disabled or replaced with login CTA.
+- CTA text: "Login with Facebook to chat".
+
+Logged-in state:
+
+- Input is enabled.
+- Send button is enabled only when text is valid.
+- Message max length should be enforced on frontend and backend.
+- Suggested max message length: 500 characters.
+- Empty messages are not allowed.
+- Whitespace-only messages are not allowed.
+
+Frontend should show friendly errors for:
+
+- Not logged in.
+- Rate limited.
+- Message too long.
+- Banned or muted account.
+- Channel unavailable.
+- Network disconnected.
+
+## 11. Connections Page
+
+The Connections page is only available after login.
+
+It must include:
+
+- Accepted connections list.
+- Pending received requests.
+- Pending sent requests.
+- Search users.
+- One-to-one chat entry points.
+
+Guest users who click Connections should see Facebook login prompt.
+
+## 12. Connection Request UX
+
+Logged-in users can search or discover other users and send connection requests.
+
+Connection states:
+
+- Not connected.
+- Request sent.
+- Request received.
+- Connected.
+- Blocked.
+
+Buttons:
+
+- Send Request
+- Cancel Request
+- Accept
+- Reject
+- Message
+- Remove Connection
+- Block
+
+Rules:
+
+- Private chat opens only after connection status is accepted.
+- A user cannot send duplicate connection requests.
+- A user cannot send a request to themselves.
+- Blocked users cannot send requests or messages.
+
+## 13. One-To-One Chat UX
+
+Private chat is only for accepted connections.
+
+Private chat must include:
+
+- Conversation list.
+- Active conversation.
+- Real-time messages.
+- Basic delivery state if supported.
+- Block/report controls.
+
+V1 must not include:
+
+- Group chat.
+- Message replies.
+- File sharing.
+- Voice/video calls.
+- Disappearing messages.
+
+## 14. Profile Page
+
+The Profile tab opens the logged-in user's own profile.
+
+Guest users who click Profile should see Facebook login prompt.
+
+Profile fields:
+
+- Display name.
+- Username.
+- Avatar.
+- Bio.
+- Age group.
+- Region.
+- Languages.
+- Gender, optional.
+
+Public profile must not show:
+
+- Exact date of birth.
+- Email.
+- Phone.
+- Facebook ID.
+- Login provider metadata.
+- Private moderation/account status.
+
+Profile editing:
+
+- User can edit display name, username, bio, region, languages, and optional gender.
+- Avatar can come from Facebook initially.
+- App may allow custom avatar upload if backend storage is ready.
+
+## 15. Facebook Profile Data Handling
+
+On first login, the app can use Facebook data to create the initial profile.
+
+Possible imported fields:
+
+- Facebook display name.
+- Facebook profile picture.
+- Facebook email, only if permission is granted.
+
+The frontend must allow the user to complete missing app-specific fields:
+
+- Username.
+- Age/date of birth if required.
+- Region.
+- Languages.
+
+If DOB is required and not available from Facebook, show onboarding after login.
+
+## 16. Onboarding After First Login
+
+After first Facebook login, if required profile data is missing, send the user to onboarding.
+
+Required onboarding fields:
+
+- Username.
+- Date of birth or age confirmation.
+- Region.
+- Preferred language.
+
+Recommended:
+
+- Ask date of birth privately.
+- Publicly show only age group.
+- Do not allow users to manually select protected age rooms if backend calculates age group.
+
+## 17. Age Safety UX
+
+If users under 18 are allowed, the frontend must support safety boundaries:
+
+- Display only age group publicly.
+- Do not show exact age.
+- Do not promote adult-minor direct discovery.
+- Show report/block clearly.
+- Avoid flirt/dating positioning in minor-facing channels.
+
+The backend must enforce the real restrictions. Frontend is only the interface.
+
+## 18. User Search
+
+User search is available only after login.
+
+Search should allow:
+
+- Username.
+- Display name.
+
+Search should not expose:
+
+- Email.
+- Phone.
+- Facebook ID.
+- Exact age.
+- Full DOB.
+
+Search results should show:
+
+- Avatar.
+- Display name.
+- Username.
+- Age group if allowed.
+- Region if allowed.
+- Connection action button.
+
+## 19. Reporting And Blocking UX
+
+V1 must include reporting and blocking.
+
+Report options:
+
+- Spam.
+- Harassment.
+- Hate or abuse.
+- Sexual content.
+- Fake profile.
+- Underage safety concern.
+- Other.
+
+Users should be able to:
+
+- Report a channel message.
+- Report a user profile.
+- Block a user.
+- Unblock a user from settings if implemented.
+
+When a user blocks another user:
+
+- Blocked user cannot send connection request.
+- Blocked user cannot send DM.
+- Their messages may be hidden from blocker in UI where possible.
+
+## 20. Frontend Routes
+
+Recommended routes:
+
+- `/` - default channel.
+- `/channels/:slug` - specific channel.
+- `/connections` - connection dashboard.
+- `/connections/:conversationId` - private chat.
+- `/profile` - own profile.
+- `/users/:username` - public profile, login required.
+- `/login` - Facebook login screen.
+- `/auth/callback/success` - post-login landing route.
+- `/onboarding` - required profile completion.
+- `/settings` - account settings.
+- `/admin` - optional admin frontend, protected.
+
+## 21. Frontend State
+
+State needed:
+
+- Current auth session.
+- Current user profile.
+- Channel list.
+- Active channel.
+- Channel messages.
+- Socket connection state.
+- Online counts.
+- Connections.
+- Pending requests.
+- Active DM conversation.
+- Toast/error messages.
+
+Recommended libraries:
+
+- Next.js.
+- TypeScript.
+- Tailwind CSS.
+- TanStack Query for API state.
+- Redux Toolkit for local UI state.
+- Socket.IO client for realtime.
+
+## 22. Socket Events Frontend Must Handle
+
+Channel events:
+
+- `channel:join`
+- `channel:leave`
+- `channel:message:new`
+- `channel:presence:update`
+- `channel:error`
+
+DM events:
+
+- `dm:join`
+- `dm:message:new`
+- `dm:error`
+
+Connection events:
+
+- `connection:request:new`
+- `connection:request:accepted`
+- `connection:request:rejected`
+
+Session events:
+
+- `auth:error`
+- `user:muted`
+- `user:banned`
+
+Exact event names can change during implementation, but the frontend and backend docs must stay aligned.
+
+## 23. Loading And Empty States
+
+The app must include polished states:
+
+- Loading channels.
+- Loading messages.
+- No messages yet.
+- No connections yet.
+- No pending requests.
+- Searching users.
+- No search results.
+- Offline/reconnecting.
+- Login required.
+- Account muted/banned.
+
+## 24. Error Handling
+
+Frontend must handle:
+
+- API unavailable.
+- Socket disconnected.
+- Facebook login failed.
+- User denied Facebook permission.
+- Token/session expired.
+- Message failed to send.
+- Rate limit reached.
+- User blocked.
+- User muted.
+- Channel disabled.
+
+Use clear user-facing messages. Do not expose internal errors.
+
+## 25. Performance Requirements
+
+Frontend should:
+
+- Avoid rendering thousands of messages at once.
+- Use virtualized message lists if channels become large.
+- Load recent messages first.
+- Paginate older messages.
+- Keep socket subscriptions only for active channel/conversation.
+- Cache channel list.
+- Compress images.
+- Use CDN for static assets.
+
+## 26. Accessibility Requirements
+
+V1 should include:
+
+- Keyboard-accessible navigation.
+- Proper button labels.
+- Color contrast.
+- Focus states.
+- Screen-reader labels for icon buttons.
+- Form validation messages.
+
+## 27. Design Direction
+
+The design should feel like a real-time social product:
+
+- Fast.
+- Mobile-first.
+- Clean.
+- Youth-friendly but not childish.
+- Easy to understand within seconds.
+
+Do not make a marketing landing page as the first screen. The first screen is the product itself: live channel chat.
+
+## 28. V1 Frontend Build Checklist
+
+- Create Next.js app.
+- Create app shell with sidebar/bottom tabs.
+- Implement guest default channel view.
+- Implement Facebook login redirect button.
+- Implement auth callback handling.
+- Implement onboarding page.
+- Implement channel list.
+- Implement realtime public channel messages.
+- Implement locked guest input.
+- Implement logged-in message input.
+- Implement profile page.
+- Implement profile edit form.
+- Implement connections page.
+- Implement user search.
+- Implement connection request actions.
+- Implement accepted connection private chat.
+- Implement report/block UI.
+- Implement responsive mobile layout.
+- Implement error/loading/empty states.
+- Add basic frontend tests.
+- Run browser testing on mobile and desktop sizes.
+
+## 29. Out Of Scope For V1
+
+Do not build in V1:
+
+- Posts/feed.
+- Reels/stories.
+- Likes/comments.
+- Message replies.
+- Group DMs.
+- Voice chat.
+- Video chat.
+- Livestreaming.
+- User-created channels.
+- Payments.
+- Premium badges.
+- Ads.
+- Complex AI recommendations.
+

@@ -1,0 +1,1245 @@
+# Social Chat App V1 - Backend Technical Documentation
+
+## 1. Project Summary
+
+This is an independent personal project.
+
+The backend powers a live social chat website with public read-only channels for guests, Facebook-only login, live channel messaging for authenticated users, connection requests, profiles, and one-to-one private chat between accepted connections.
+
+## 2. Scale Target
+
+V1 must be designed for:
+
+- 50,000 registered/logged-in users.
+- 5,000 concurrent users actively chatting.
+- Public guest traffic reading channel messages.
+- Multiple live public channels.
+- One-to-one direct messages between accepted connections.
+
+The system should be built professionally from day one with rate limiting, moderation, observability, and horizontal scaling.
+
+## 3. Recommended Backend Architecture
+
+Use a modular monolith plus separate realtime and worker processes.
+
+Recommended deployable apps:
+
+1. API App
+2. Realtime App
+3. Worker App
+
+This avoids unnecessary microservice complexity while still supporting scale.
+
+## 4. API App Responsibilities
+
+The API app handles normal HTTP APIs:
+
+- Facebook auth start and callback.
+- Session/token refresh.
+- Logout.
+- Current user.
+- Profile read/update.
+- Channel list.
+- Channel message history.
+- Connection requests.
+- Connections list.
+- User search.
+- Reports.
+- Blocks.
+- Admin moderation APIs.
+
+Recommended framework:
+
+- NestJS with TypeScript.
+
+## 5. Realtime App Responsibilities
+
+The realtime app handles WebSocket connections:
+
+- Authenticated socket connection.
+- Guest read-only socket connection.
+- Join/leave channel rooms.
+- Send public channel messages.
+- Broadcast public channel messages.
+- Join/leave DM rooms.
+- Send DM messages.
+- Presence tracking.
+- Online counts.
+- Reconnection handling.
+
+Recommended:
+
+- NestJS WebSockets.
+- Socket.IO.
+- Socket.IO Redis adapter for horizontal scaling.
+
+## 6. Worker App Responsibilities
+
+The worker app handles background tasks:
+
+- Moderation jobs.
+- Spam detection jobs.
+- Notification jobs.
+- Message cleanup/retention jobs.
+- Profile image processing.
+- Audit/event processing.
+- Scheduled data cleanup.
+
+Recommended:
+
+- BullMQ or a similar Redis-backed queue for V1.
+- Move to Kafka/NATS later only if needed.
+
+## 7. Core Infrastructure
+
+Required services:
+
+- PostgreSQL for permanent data.
+- Redis for realtime presence, pub/sub, rate limits, and queues.
+- Object storage for profile images.
+- CDN for frontend and static assets.
+- Load balancer for API and realtime services.
+- Monitoring and logging system.
+
+Recommended providers:
+
+- PostgreSQL: Neon, Supabase, AWS RDS, or managed PostgreSQL.
+- Redis: Upstash, Redis Cloud, or AWS ElastiCache.
+- Object storage: Cloudflare R2 or AWS S3.
+- Frontend hosting: Vercel or Cloudflare Pages.
+- Backend hosting: AWS ECS, Render, Railway, Fly.io, or DigitalOcean App Platform.
+
+## 8. Why Not Too Many Microservices In V1
+
+Do not start with separate services for every feature.
+
+Avoid this in V1:
+
+- Separate auth service.
+- Separate profile service.
+- Separate channel service.
+- Separate connection service.
+- Separate DM service.
+- Separate moderation service.
+
+Instead, use:
+
+- One API app with feature modules.
+- One realtime app.
+- One worker app.
+
+This keeps development faster and easier while still allowing horizontal scaling.
+
+Later, if traffic grows, split modules into services based on real bottlenecks.
+
+## 9. Backend Modules
+
+API app modules:
+
+- AuthModule
+- UsersModule
+- ProfilesModule
+- ChannelsModule
+- ConnectionsModule
+- DirectMessagesModule
+- ReportsModule
+- BlocksModule
+- ModerationModule
+- AdminModule
+- UploadsModule
+
+Realtime app modules:
+
+- RealtimeAuthModule
+- ChannelGatewayModule
+- DirectMessageGatewayModule
+- PresenceModule
+- RealtimeRateLimitModule
+
+Worker app modules:
+
+- ModerationWorkerModule
+- NotificationWorkerModule
+- CleanupWorkerModule
+- ImageWorkerModule
+
+## 10. Facebook-Only Authentication
+
+V1 must support only Facebook Authentication.
+
+There must be no password login, email login, OTP login, Google login, or Apple login in V1.
+
+Required Facebook OAuth flow:
+
+1. Frontend sends user to backend route: `GET /auth/facebook`.
+2. Backend redirects to Facebook OAuth.
+3. User authorizes app on Facebook.
+4. Facebook redirects to backend route: `GET /auth/facebook/callback`.
+5. Backend verifies Facebook response.
+6. Backend fetches Facebook profile.
+7. Backend creates or finds app user.
+8. Backend creates session.
+9. Backend redirects user back to frontend.
+
+Recommended Facebook permissions:
+
+- `public_profile`
+- `email`, if required and approved by Facebook
+
+Do not request unnecessary Facebook permissions in V1.
+
+## 11. Auth Data Model
+
+Users table:
+
+- `id`
+- `status`
+- `created_at`
+- `updated_at`
+- `last_login_at`
+
+Auth identities table:
+
+- `id`
+- `user_id`
+- `provider`
+- `provider_user_id`
+- `provider_email`
+- `provider_display_name`
+- `provider_avatar_url`
+- `created_at`
+- `updated_at`
+
+For V1:
+
+- `provider` is always `facebook`.
+- `provider_user_id` must be unique with provider.
+
+Sessions table:
+
+- `id`
+- `user_id`
+- `refresh_token_hash`
+- `ip_address`
+- `user_agent`
+- `expires_at`
+- `revoked_at`
+- `created_at`
+
+Recommended auth strategy:
+
+- Short-lived access token.
+- Refresh token stored as httpOnly secure cookie.
+- Store only refresh token hash in database.
+
+## 12. First Login User Creation
+
+When a Facebook user logs in for the first time:
+
+1. Check `auth_identities` by `provider = facebook` and `provider_user_id`.
+2. If found, login existing user.
+3. If not found, create user.
+4. Create auth identity.
+5. Create initial profile.
+6. Mark profile as incomplete if required fields are missing.
+
+Initial profile can use:
+
+- Facebook display name.
+- Facebook avatar.
+- Facebook email if available.
+
+App-specific required fields must still be collected:
+
+- Username.
+- Date of birth or age confirmation.
+- Region.
+- Preferred language.
+
+## 13. Authorization Rules
+
+Guest users can:
+
+- Fetch public channel list.
+- Fetch public message history.
+- Connect to read-only public channel socket.
+
+Guest users cannot:
+
+- Send channel messages.
+- View full profiles.
+- Search users.
+- Send connection requests.
+- Open Connections APIs.
+- Send DMs.
+
+Authenticated users can:
+
+- Send channel messages.
+- View allowed public profiles.
+- Search users.
+- Manage connection requests.
+- Send DMs to accepted connections.
+- Report/block users.
+- Manage own profile.
+
+Admin users can:
+
+- Mute users.
+- Ban users.
+- Delete messages.
+- Review reports.
+- Manage channels.
+
+## 14. Database Choice
+
+Recommended primary database: PostgreSQL.
+
+Reason:
+
+- Strong relational structure.
+- Connections and conversations need clean constraints.
+- Good indexing.
+- Good transaction support.
+- Easier moderation/admin queries.
+
+Redis is required for:
+
+- Socket.IO pub/sub adapter.
+- Presence.
+- Online counts.
+- Rate limits.
+- Short-lived caches.
+- Queues.
+
+## 15. Database Tables
+
+### users
+
+- `id uuid primary key`
+- `status text not null`
+- `role text not null default 'user'`
+- `created_at timestamptz not null`
+- `updated_at timestamptz not null`
+- `last_login_at timestamptz`
+
+Statuses:
+
+- `active`
+- `muted`
+- `banned`
+- `deleted`
+
+Roles:
+
+- `user`
+- `moderator`
+- `admin`
+
+### auth_identities
+
+- `id uuid primary key`
+- `user_id uuid references users(id)`
+- `provider text not null`
+- `provider_user_id text not null`
+- `provider_email text`
+- `provider_display_name text`
+- `provider_avatar_url text`
+- `created_at timestamptz not null`
+- `updated_at timestamptz not null`
+
+Indexes:
+
+- Unique index on `(provider, provider_user_id)`.
+- Index on `user_id`.
+
+### sessions
+
+- `id uuid primary key`
+- `user_id uuid references users(id)`
+- `refresh_token_hash text not null`
+- `ip_address text`
+- `user_agent text`
+- `expires_at timestamptz not null`
+- `revoked_at timestamptz`
+- `created_at timestamptz not null`
+
+Indexes:
+
+- Index on `user_id`.
+- Index on `expires_at`.
+
+### profiles
+
+- `user_id uuid primary key references users(id)`
+- `username text unique not null`
+- `display_name text not null`
+- `avatar_url text`
+- `bio text`
+- `dob date`
+- `age_group text`
+- `gender text`
+- `region text`
+- `city text`
+- `primary_language text`
+- `languages text[]`
+- `is_complete boolean not null default false`
+- `created_at timestamptz not null`
+- `updated_at timestamptz not null`
+
+Indexes:
+
+- Unique index on `username`.
+- Index on `display_name`.
+- Index on `region`.
+- Index on `age_group`.
+- GIN index on `languages` if using PostgreSQL arrays.
+
+### channels
+
+- `id uuid primary key`
+- `name text not null`
+- `slug text unique not null`
+- `type text not null`
+- `visibility text not null default 'public'`
+- `is_default boolean not null default false`
+- `is_active boolean not null default true`
+- `sort_order int not null default 0`
+- `created_at timestamptz not null`
+- `updated_at timestamptz not null`
+
+Channel types:
+
+- `language`
+- `age`
+- `region`
+- `general`
+
+### channel_messages
+
+- `id uuid primary key`
+- `channel_id uuid references channels(id)`
+- `sender_id uuid references users(id)`
+- `body text not null`
+- `status text not null default 'active'`
+- `created_at timestamptz not null`
+- `deleted_at timestamptz`
+- `deleted_by uuid references users(id)`
+
+Statuses:
+
+- `active`
+- `deleted`
+- `hidden`
+- `flagged`
+
+Indexes:
+
+- Index on `(channel_id, created_at desc)`.
+- Index on `sender_id`.
+- Index on `created_at`.
+
+### connections
+
+- `id uuid primary key`
+- `requester_id uuid references users(id)`
+- `receiver_id uuid references users(id)`
+- `status text not null`
+- `created_at timestamptz not null`
+- `updated_at timestamptz not null`
+
+Statuses:
+
+- `pending`
+- `accepted`
+- `rejected`
+- `cancelled`
+- `blocked`
+
+Indexes:
+
+- Unique index preventing duplicate requester/receiver pairs.
+- Index on `requester_id`.
+- Index on `receiver_id`.
+- Index on `status`.
+
+Important:
+
+- Prevent duplicate reversed pairs in application logic or with normalized user pair columns.
+
+### conversations
+
+- `id uuid primary key`
+- `type text not null default 'direct'`
+- `created_at timestamptz not null`
+- `updated_at timestamptz not null`
+
+### conversation_members
+
+- `conversation_id uuid references conversations(id)`
+- `user_id uuid references users(id)`
+- `created_at timestamptz not null`
+
+Primary key:
+
+- `(conversation_id, user_id)`
+
+### direct_messages
+
+- `id uuid primary key`
+- `conversation_id uuid references conversations(id)`
+- `sender_id uuid references users(id)`
+- `body text not null`
+- `status text not null default 'active'`
+- `created_at timestamptz not null`
+- `deleted_at timestamptz`
+
+Indexes:
+
+- Index on `(conversation_id, created_at desc)`.
+- Index on `sender_id`.
+
+### reports
+
+- `id uuid primary key`
+- `reporter_id uuid references users(id)`
+- `target_user_id uuid references users(id)`
+- `target_channel_message_id uuid references channel_messages(id)`
+- `target_direct_message_id uuid references direct_messages(id)`
+- `reason text not null`
+- `details text`
+- `status text not null default 'open'`
+- `created_at timestamptz not null`
+- `reviewed_by uuid references users(id)`
+- `reviewed_at timestamptz`
+
+Reasons:
+
+- `spam`
+- `harassment`
+- `hate_or_abuse`
+- `sexual_content`
+- `fake_profile`
+- `underage_safety`
+- `other`
+
+### blocks
+
+- `id uuid primary key`
+- `blocker_id uuid references users(id)`
+- `blocked_user_id uuid references users(id)`
+- `created_at timestamptz not null`
+
+Indexes:
+
+- Unique index on `(blocker_id, blocked_user_id)`.
+
+### moderation_actions
+
+- `id uuid primary key`
+- `admin_id uuid references users(id)`
+- `target_user_id uuid references users(id)`
+- `target_message_id uuid`
+- `action text not null`
+- `reason text`
+- `metadata jsonb`
+- `created_at timestamptz not null`
+
+Actions:
+
+- `mute_user`
+- `unmute_user`
+- `ban_user`
+- `unban_user`
+- `delete_channel_message`
+- `delete_direct_message`
+- `resolve_report`
+
+### banned_words
+
+- `id uuid primary key`
+- `word text unique not null`
+- `severity text not null default 'medium'`
+- `is_active boolean not null default true`
+- `created_at timestamptz not null`
+
+## 16. Channel System
+
+Channels are controlled by admins/system config in V1.
+
+Users cannot create channels in V1.
+
+Each channel has:
+
+- Name.
+- Slug.
+- Type.
+- Visibility.
+- Active status.
+- Sort order.
+- Default flag.
+
+The backend must provide one default public active channel.
+
+Default channel logic:
+
+1. Find active channel where `is_default = true`.
+2. If none exists, return first active public channel by sort order.
+3. If no active channel exists, return empty state.
+
+## 17. Public Channel Guest Access
+
+Guest users can fetch:
+
+- `GET /channels`
+- `GET /channels/default`
+- `GET /channels/:slug/messages`
+
+Guest users can connect to sockets for reading public channels, but they cannot emit message-send events.
+
+Every message-send event must verify authenticated user server-side.
+
+## 18. Realtime Socket Design
+
+Use Socket.IO namespaces or gateways.
+
+Suggested namespaces:
+
+- `/channels`
+- `/dm`
+
+Socket rooms:
+
+- `channel:{channelId}`
+- `dm:{conversationId}`
+- `user:{userId}`
+
+Guest socket:
+
+- Allowed to join `channel:{channelId}` for public channels.
+- Not allowed to send messages.
+- Not allowed to join DM rooms.
+
+Authenticated socket:
+
+- Allowed to join public channel rooms.
+- Allowed to send channel messages.
+- Allowed to join DM rooms where user is a member.
+
+## 19. Socket Authentication
+
+Socket handshake must support:
+
+- Authenticated users with access token or session cookie.
+- Guests with no auth.
+
+If token is present:
+
+- Validate token.
+- Attach user to socket context.
+- Check user status.
+
+If no token:
+
+- Mark socket as guest.
+- Allow read-only public channel events.
+
+If token invalid:
+
+- Reject socket or connect as guest depending on product decision.
+
+Recommended:
+
+- Invalid token should return auth error and require refresh/login.
+
+## 20. Channel Message Flow
+
+When authenticated user sends a channel message:
+
+1. Validate socket session.
+2. Check user status is active.
+3. Validate channel exists and is active.
+4. Check message body length and content.
+5. Apply per-user rate limit.
+6. Apply per-channel rate limit if needed.
+7. Check banned words/basic moderation.
+8. Save message to PostgreSQL.
+9. Publish message to Redis/Socket.IO room.
+10. Broadcast to `channel:{channelId}`.
+
+Never broadcast unsaved messages as final messages. Save first, then broadcast.
+
+## 21. Direct Message Flow
+
+When authenticated user sends a DM:
+
+1. Validate socket session.
+2. Check user status is active.
+3. Validate conversation exists.
+4. Validate sender is conversation member.
+5. Validate both users are accepted connections.
+6. Check neither user has blocked the other.
+7. Validate message body.
+8. Apply rate limit.
+9. Save direct message.
+10. Broadcast to `dm:{conversationId}`.
+11. Send notification event to recipient's `user:{userId}` room if online.
+
+## 22. Connection Rules
+
+Connection request rules:
+
+- User cannot connect to self.
+- User cannot duplicate pending request.
+- User cannot duplicate accepted connection.
+- User cannot request a user they blocked.
+- User cannot request a user who blocked them.
+- Banned users cannot send requests.
+- Muted users may be blocked from sending requests depending on policy.
+
+Accepted connection rules:
+
+- DM conversation is created when request is accepted.
+- If conversation already exists, reuse it.
+- Removing a connection should disable future DM sending unless reconnected.
+
+## 23. API Endpoints
+
+### Auth
+
+- `GET /auth/facebook`
+- `GET /auth/facebook/callback`
+- `POST /auth/refresh`
+- `POST /auth/logout`
+- `GET /auth/me`
+
+### Profiles
+
+- `GET /profiles/me`
+- `PATCH /profiles/me`
+- `GET /profiles/:username`
+
+`GET /profiles/:username` requires login.
+
+### Channels
+
+- `GET /channels`
+- `GET /channels/default`
+- `GET /channels/:slug`
+- `GET /channels/:slug/messages?cursor=...&limit=...`
+
+### Connections
+
+- `GET /connections`
+- `GET /connections/requests/received`
+- `GET /connections/requests/sent`
+- `POST /connections/requests`
+- `POST /connections/requests/:id/accept`
+- `POST /connections/requests/:id/reject`
+- `POST /connections/requests/:id/cancel`
+- `DELETE /connections/:connectionId`
+
+### User Search
+
+- `GET /users/search?q=...`
+
+Requires login.
+
+### Direct Messages
+
+- `GET /dm/conversations`
+- `GET /dm/conversations/:id/messages?cursor=...&limit=...`
+
+Sending DMs happens through sockets.
+
+### Reports And Blocks
+
+- `POST /reports`
+- `POST /blocks`
+- `DELETE /blocks/:blockedUserId`
+- `GET /blocks`
+
+### Admin
+
+- `GET /admin/reports`
+- `POST /admin/users/:id/mute`
+- `POST /admin/users/:id/unmute`
+- `POST /admin/users/:id/ban`
+- `POST /admin/users/:id/unban`
+- `DELETE /admin/channel-messages/:id`
+- `DELETE /admin/direct-messages/:id`
+- `POST /admin/channels`
+- `PATCH /admin/channels/:id`
+
+## 24. Socket Events
+
+### Channel Events
+
+Client emits:
+
+- `channel:join`
+- `channel:leave`
+- `channel:message:send`
+
+Server emits:
+
+- `channel:message:new`
+- `channel:presence:update`
+- `channel:error`
+
+### Direct Message Events
+
+Client emits:
+
+- `dm:join`
+- `dm:leave`
+- `dm:message:send`
+
+Server emits:
+
+- `dm:message:new`
+- `dm:error`
+
+### Connection Events
+
+Server emits:
+
+- `connection:request:new`
+- `connection:request:accepted`
+- `connection:request:rejected`
+
+### Account Events
+
+Server emits:
+
+- `auth:error`
+- `user:muted`
+- `user:banned`
+
+## 25. Rate Limits
+
+Rate limits are mandatory.
+
+Suggested limits:
+
+- Login callback abuse protection: per IP.
+- Message send: 10 messages per 10 seconds per user.
+- Channel burst limit: 3 messages per 2 seconds per user.
+- DM send: 20 messages per minute per user.
+- Connection requests: 30 per day per user.
+- User search: 60 requests per minute per user.
+- Profile update: 20 per hour per user.
+- Reports: 50 per day per user.
+
+Use Redis for rate limits.
+
+Backend must return clear error codes:
+
+- `RATE_LIMITED`
+- `AUTH_REQUIRED`
+- `USER_MUTED`
+- `USER_BANNED`
+- `CHANNEL_DISABLED`
+- `MESSAGE_TOO_LONG`
+- `CONNECTION_REQUIRED`
+- `BLOCKED`
+
+## 26. Message Limits
+
+Suggested V1 limits:
+
+- Channel message max length: 500 characters.
+- DM max length: 1000 characters.
+- No attachments in V1.
+- No HTML allowed.
+- Strip or escape unsafe content.
+- Normalize whitespace.
+
+## 27. Moderation Requirements
+
+Moderation is required from day one.
+
+V1 must include:
+
+- Report user.
+- Report channel message.
+- Report direct message.
+- Block user.
+- Admin mute user.
+- Admin ban user.
+- Admin delete channel message.
+- Admin delete direct message.
+- Banned words list.
+- Basic spam detection.
+- Moderation audit logs.
+
+Muted user:
+
+- Cannot send channel messages.
+- Cannot send DMs.
+- May still read channels.
+
+Banned user:
+
+- Cannot login/use app normally.
+- Existing sessions should be invalidated or blocked at auth check.
+
+## 28. Presence And Online Counts
+
+Use Redis for presence.
+
+Suggested Redis keys:
+
+- `presence:user:{userId}` for user online state.
+- `presence:channel:{channelId}` for channel members.
+- `socket:user:{userId}` for active socket IDs.
+
+Online counts should not query PostgreSQL on every request.
+
+Presence updates:
+
+- On socket connect.
+- On channel join.
+- On channel leave.
+- On disconnect.
+- Periodic cleanup for stale sockets.
+
+## 29. Redis Usage
+
+Redis is used for:
+
+- Socket.IO adapter.
+- Pub/sub across realtime instances.
+- Presence.
+- Online counts.
+- Rate limiting.
+- Queues.
+- Short-lived cache.
+
+Do not store permanent messages only in Redis.
+
+PostgreSQL is the source of truth for users, profiles, channels, messages, connections, and reports.
+
+## 30. Message History
+
+For channel messages:
+
+- Store messages permanently or according to retention policy.
+- Load recent messages with cursor pagination.
+- Suggested default: latest 50 messages.
+- Suggested max page size: 100.
+
+For DMs:
+
+- Store messages permanently unless user deletion policy is added later.
+- Load latest 50 messages by default.
+
+Pagination should use cursor based on message timestamp and ID.
+
+## 31. Security Requirements
+
+Required:
+
+- Validate every request body.
+- Validate every socket event payload.
+- Use secure cookies if using cookie sessions.
+- Use CSRF protection if needed for cookie-based auth.
+- Use CORS allowlist.
+- Never expose Facebook access token to frontend.
+- Never store raw refresh tokens.
+- Never trust user ID from frontend payload.
+- Check authorization server-side for every action.
+- Escape/sanitize user-generated text.
+- Add helmet/security headers.
+- Add audit logs for admin actions.
+
+## 32. Privacy Requirements
+
+Do not expose:
+
+- Facebook provider user ID.
+- Facebook access token.
+- Email.
+- Phone.
+- Date of birth.
+- IP address.
+- User agent.
+- Internal user status except where needed.
+
+Public profile should expose:
+
+- User ID or username.
+- Display name.
+- Avatar.
+- Bio.
+- Age group.
+- Region if user allows.
+- Languages.
+- Connection status relative to viewer.
+
+## 33. Age Safety
+
+If the app allows users under 18:
+
+- Store DOB privately.
+- Show only age group publicly.
+- Backend calculates age group.
+- Do not allow users to manually choose restricted age group.
+- Consider blocking adult-minor direct discovery.
+- Add stricter report handling for underage safety reports.
+
+If the first launch does not want this complexity, set minimum age to 18.
+
+This decision must be made before launch.
+
+## 34. Admin Panel Backend Needs
+
+Admin APIs must support:
+
+- View reported messages.
+- View reported users.
+- Review report details.
+- Mute user.
+- Ban user.
+- Delete message.
+- Resolve report.
+- Manage channel active status.
+- Manage default channel.
+- Manage banned words.
+
+Admin actions must be written to `moderation_actions`.
+
+## 35. Observability
+
+Required metrics:
+
+- API request count.
+- API latency.
+- API error rate.
+- Active WebSocket connections.
+- Channel joins per minute.
+- Messages per second.
+- Failed message sends.
+- Rate limit hits.
+- Redis memory usage.
+- PostgreSQL CPU and slow queries.
+- Reports per hour.
+- Bans/mutes per day.
+
+Recommended tools:
+
+- Sentry for errors.
+- Prometheus and Grafana for metrics.
+- Cloud provider logs.
+- Uptime monitoring.
+
+## 36. Load Testing
+
+Before launch, test:
+
+- 5,000 concurrent socket users.
+- 1,000 users in one channel.
+- 5,000 users across many channels.
+- Message bursts.
+- Guest read-only sockets.
+- Login/session refresh.
+- DM sending.
+- Redis fail/reconnect behavior.
+
+Recommended tools:
+
+- k6.
+- Artillery with Socket.IO support.
+
+Success criteria:
+
+- No server crash.
+- No uncontrolled memory growth.
+- Message send p95 latency stays acceptable.
+- DB CPU remains stable.
+- Redis memory remains stable.
+- Realtime app recovers after instance restart.
+
+## 37. Deployment Topology For Launch
+
+Minimum serious V1 deployment:
+
+- 2 API app instances.
+- 2 realtime app instances.
+- 1 worker app instance.
+- 1 managed PostgreSQL instance.
+- 1 managed Redis instance.
+- 1 object storage bucket.
+- CDN.
+- Load balancer.
+
+Realtime app must use sticky sessions or Socket.IO Redis adapter correctly. With Socket.IO Redis adapter, instances can broadcast events across servers.
+
+## 38. Environment Variables
+
+Required environment variables:
+
+- `NODE_ENV`
+- `PORT`
+- `API_BASE_URL`
+- `FRONTEND_BASE_URL`
+- `DATABASE_URL`
+- `REDIS_URL`
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- `ACCESS_TOKEN_TTL`
+- `REFRESH_TOKEN_TTL`
+- `FACEBOOK_APP_ID`
+- `FACEBOOK_APP_SECRET`
+- `FACEBOOK_CALLBACK_URL`
+- `COOKIE_DOMAIN`
+- `CORS_ORIGINS`
+- `S3_BUCKET`
+- `S3_REGION`
+- `S3_ACCESS_KEY_ID`
+- `S3_SECRET_ACCESS_KEY`
+- `SENTRY_DSN`
+
+Never commit real secrets.
+
+## 39. Testing Requirements
+
+Backend tests:
+
+- Facebook auth user creation.
+- Existing Facebook user login.
+- Profile completion.
+- Guest channel read access.
+- Guest message send blocked.
+- Authenticated channel message send.
+- Message rate limiting.
+- Channel history pagination.
+- Connection request creation.
+- Duplicate connection prevention.
+- Accept/reject request.
+- DM send only for accepted connections.
+- Block prevents request and DM.
+- Report creation.
+- Admin mute/ban/delete actions.
+- Socket auth.
+- Socket guest read-only behavior.
+
+## 40. V1 Development Plan
+
+Phase 1: Foundation
+
+- Create backend project.
+- Configure PostgreSQL.
+- Configure Redis.
+- Set up migrations.
+- Add base config module.
+- Add logging.
+- Add health checks.
+
+Phase 2: Facebook Auth
+
+- Create Facebook OAuth flow.
+- Create users table.
+- Create auth identities table.
+- Create sessions table.
+- Add refresh/logout/me endpoints.
+- Add route guards.
+
+Phase 3: Profiles And Onboarding
+
+- Create profiles table.
+- Create profile APIs.
+- Add username validation.
+- Add profile completion state.
+- Add public profile API requiring login.
+
+Phase 4: Channels
+
+- Create channels table.
+- Seed default channels.
+- Create channel list APIs.
+- Create channel history API.
+- Create channel messages table.
+
+Phase 5: Realtime Channel Chat
+
+- Create realtime app.
+- Add Socket.IO.
+- Add Redis adapter.
+- Add guest read-only channel joins.
+- Add authenticated message send.
+- Add presence and online counts.
+- Add rate limits.
+
+Phase 6: Connections
+
+- Create connections table.
+- Add request APIs.
+- Add accept/reject/cancel/remove.
+- Add user search.
+- Add block rules.
+
+Phase 7: Direct Messages
+
+- Create conversations tables.
+- Create direct messages table.
+- Create DM socket gateway.
+- Enforce accepted connection rule.
+- Add DM history API.
+
+Phase 8: Moderation
+
+- Add reports.
+- Add blocks.
+- Add admin moderation APIs.
+- Add banned words.
+- Add audit logs.
+
+Phase 9: Production Readiness
+
+- Add tests.
+- Add load tests.
+- Add monitoring.
+- Add deployment pipeline.
+- Run 5k socket load test.
+- Fix bottlenecks.
+
+## 41. Out Of Scope For V1
+
+Do not build in V1:
+
+- Email/password login.
+- OTP login.
+- Google login.
+- Apple login.
+- Posts/feed.
+- Stories.
+- Reels.
+- Likes/comments.
+- Message replies.
+- Message reactions.
+- Group DMs.
+- Voice/video calls.
+- Livestreaming.
+- User-created channels.
+- Monetization.
+- Ads.
+- Payment system.
+- AI-only moderation.
+
+## 42. Final Backend Decision
+
+Build V1 with:
+
+- One API app.
+- One realtime app.
+- One worker app.
+- PostgreSQL.
+- Redis.
+- Object storage.
+- Facebook-only auth.
+- Admin moderation.
+- Load testing before public launch.
+
+This is the right level of architecture for 50,000 registered users and 5,000 concurrent chat users without making development unnecessarily complicated.
+
