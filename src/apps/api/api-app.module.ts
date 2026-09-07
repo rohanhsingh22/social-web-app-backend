@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { appConfig } from '@app/config/app.config';
 import { CoreModule } from '@app/core/core.module';
 import { AuthModule } from '@app/modules/auth/auth.module';
+import { IntegrationModule } from '@app/modules/integration/integration.module';
 import { UsersModule } from '@app/modules/users/users.module';
 import { ProfilesModule } from '@app/modules/profiles/profiles.module';
 import { ChannelsModule } from '@app/modules/channels/channels.module';
@@ -30,6 +31,7 @@ import { UploadsModule } from '@app/modules/uploads/uploads.module';
     ]),
     CoreModule,
     AuthModule,
+    IntegrationModule,
     UsersModule,
     ProfilesModule,
     ChannelsModule,

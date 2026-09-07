@@ -137,6 +137,7 @@ model Profile {
   dob             DateTime? @db.Date
   ageGroup        String?  @map("age_group")
   gender          String?
+  characterConfig Json?    @map("character_config")
   region          String?
   city            String?
   primaryLanguage String?  @map("primary_language")

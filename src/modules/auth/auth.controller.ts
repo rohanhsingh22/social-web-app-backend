@@ -2,10 +2,8 @@ import {
   Controller,
   Get,
   Post,
-  Query,
   Req,
   Res,
-  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -22,33 +20,6 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly config: ConfigService,
   ) {}
-
-  @Get('facebook')
-  startFacebookLogin(@Res() response: Response) {
-    return response.redirect(this.authService.getFacebookLoginUrl());
-  }
-
-  @Get('facebook/callback')
-  async facebookCallback(
-    @Query('code') code: string | undefined,
-    @Req() request: Request,
-    @Res() response: Response,
-  ) {
-    if (!code) {
-      throw new UnauthorizedException('FACEBOOK_CODE_REQUIRED');
-    }
-
-    const result = await this.authService.loginWithFacebookCode(
-      code,
-      this.sessionContext(request),
-    );
-
-    this.setAuthCookies(response, result.accessToken, result.refreshToken);
-
-    return response.redirect(
-      `${this.config.getOrThrow<string>('app.frontendBaseUrl')}/auth/callback/success`,
-    );
-  }
 
   @Post('refresh')
   async refresh(@Req() request: Request, @Res({ passthrough: true }) response: Response) {

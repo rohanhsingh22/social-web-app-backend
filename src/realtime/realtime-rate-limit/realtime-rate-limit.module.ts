@@ -1,4 +1,8 @@
 import { Module } from '@nestjs/common';
+import { RealtimeRateLimitService } from './realtime-rate-limit.service';
 
-@Module({})
+@Module({
+  providers: [RealtimeRateLimitService],
+  exports: [RealtimeRateLimitService],
+})
 export class RealtimeRateLimitModule {}

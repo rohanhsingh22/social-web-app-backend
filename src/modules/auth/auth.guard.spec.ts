@@ -1,4 +1,5 @@
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 import { AuthenticatedUser } from './auth.types';
@@ -8,6 +9,8 @@ const createContext = (request: unknown): ExecutionContext =>
     switchToHttp: () => ({
       getRequest: () => request,
     }),
+    getHandler: () => ({}),
+    getClass: () => ({}),
   }) as ExecutionContext;
 
 describe('AuthGuard', () => {
@@ -20,7 +23,10 @@ describe('AuthGuard', () => {
     const authService = {
       verifyAccessToken: jest.fn().mockResolvedValue(user),
     } as unknown as AuthService;
-    const guard = new AuthGuard(authService);
+    const reflector = {
+      getAllAndOverride: jest.fn().mockReturnValue(false),
+    } as unknown as Reflector;
+    const guard = new AuthGuard(authService, reflector);
     const request = {
       header: jest.fn().mockReturnValue('Bearer access-token'),
     };
@@ -34,7 +40,10 @@ describe('AuthGuard', () => {
     const authService = {
       verifyAccessToken: jest.fn(),
     } as unknown as AuthService;
-    const guard = new AuthGuard(authService);
+    const reflector = {
+      getAllAndOverride: jest.fn().mockReturnValue(false),
+    } as unknown as Reflector;
+    const guard = new AuthGuard(authService, reflector);
     const request = {
       header: jest.fn().mockReturnValue(undefined),
       cookies: {},
@@ -43,6 +52,23 @@ describe('AuthGuard', () => {
     await expect(guard.canActivate(createContext(request))).rejects.toThrow(
       UnauthorizedException,
     );
+    expect(authService.verifyAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('allows public routes without a token', async () => {
+    const authService = {
+      verifyAccessToken: jest.fn(),
+    } as unknown as AuthService;
+    const reflector = {
+      getAllAndOverride: jest.fn().mockReturnValue(true),
+    } as unknown as Reflector;
+    const guard = new AuthGuard(authService, reflector);
+    const request = {
+      header: jest.fn().mockReturnValue(undefined),
+      cookies: {},
+    };
+
+    await expect(guard.canActivate(createContext(request))).resolves.toBe(true);
     expect(authService.verifyAccessToken).not.toHaveBeenCalled();
   });
 });

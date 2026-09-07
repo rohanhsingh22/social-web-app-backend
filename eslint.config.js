@@ -15,9 +15,13 @@ module.exports = [
       },
       globals: {
         Buffer: 'readonly',
+        clearInterval: 'readonly',
+        clearTimeout: 'readonly',
         console: 'readonly',
         fetch: 'readonly',
         process: 'readonly',
+        setInterval: 'readonly',
+        setTimeout: 'readonly',
         URL: 'readonly',
       },
     },

@@ -1,9 +1,14 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 @Injectable()
-export class RedisService implements OnModuleDestroy {
+export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private readonly client: Redis;
 
@@ -19,6 +24,19 @@ export class RedisService implements OnModuleDestroy {
     });
   }
 
+  async onModuleInit() {
+    try {
+      await this.client.connect();
+      this.logger.log('Redis connection established');
+    } catch (error) {
+      this.logger.warn(
+        `Redis connection unavailable during startup: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
   get connection(): Redis {
     return this.client;
   }
@@ -26,7 +44,11 @@ export class RedisService implements OnModuleDestroy {
   async health(): Promise<boolean> {
     try {
       return (await this.client.ping()) === 'PONG';
-    } catch {
+    } catch (error) {
+      this.logger.error(
+        'Redis health check failed',
+        error instanceof Error ? error.stack : undefined,
+      );
       return false;
     }
   }

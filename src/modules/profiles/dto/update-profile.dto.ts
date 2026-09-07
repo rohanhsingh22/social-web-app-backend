@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsDateString,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
@@ -38,6 +39,10 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(40)
   gender?: string;
+
+  @IsOptional()
+  @IsObject()
+  characterConfig?: Record<string, unknown>;
 
   @IsOptional()
   @IsString()

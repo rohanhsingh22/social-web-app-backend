@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AllExceptionsFilter } from '@app/common/all-exceptions.filter';
 import { ApiAppModule } from './api-app.module';
 
 async function bootstrap() {
@@ -24,6 +25,7 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   const port = config.getOrThrow<number>('app.port');
   await app.listen(port);

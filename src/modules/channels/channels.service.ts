@@ -1,8 +1,10 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { MessageStatus } from '@prisma/client';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 
@@ -11,7 +13,12 @@ const MAX_MESSAGE_LIMIT = 100;
 
 @Injectable()
 export class ChannelsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ChannelsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
 
   listPublicChannels() {
     return this.prisma.channel.findMany({
@@ -56,10 +63,75 @@ export class ChannelsService {
     });
 
     if (!channel) {
+      this.logger.warn(`Channel not found for slug ${slug}`);
       throw new NotFoundException('CHANNEL_NOT_FOUND');
     }
 
     return channel;
+  }
+
+  async getBySlugOrId(slugOrId: string) {
+    const channel = await this.prisma.channel.findFirst({
+      where: {
+        isActive: true,
+        visibility: 'public',
+        ...(this.isUuid(slugOrId) ? { id: slugOrId } : { slug: slugOrId }),
+      },
+    });
+
+    if (!channel) {
+      this.logger.warn(`Channel not found for slug or id ${slugOrId}`);
+      throw new NotFoundException('CHANNEL_NOT_FOUND');
+    }
+
+    return channel;
+  }
+
+  async createMessage(channelId: string, senderId: string, body: string) {
+    const channel = await this.prisma.channel.findFirst({
+      where: {
+        id: channelId,
+        isActive: true,
+        visibility: 'public',
+      },
+    });
+
+    if (!channel) {
+      this.logger.warn(`Channel not found for id ${channelId}`);
+      throw new NotFoundException('CHANNEL_NOT_FOUND');
+    }
+
+    try {
+      const message = await this.prisma.channelMessage.create({
+        data: {
+          channelId,
+          senderId,
+          body,
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              profile: {
+                select: {
+                  username: true,
+                  displayName: true,
+                  avatarUrl: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return this.mapMessageWithProfileUrl(message);
+    } catch (error) {
+      this.logger.error(
+        `Failed to create message in channel ${channelId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
   }
 
   async getMessages(slug: string, cursor?: string, limitValue?: string) {
@@ -104,7 +176,7 @@ export class ChannelsService {
 
     return {
       channel,
-      messages: page.reverse(),
+      messages: page.reverse().map((msg) => this.mapMessageWithProfileUrl(msg)),
       pageInfo: {
         hasMore,
         nextCursor,
@@ -130,5 +202,44 @@ export class ChannelsService {
     }
 
     return date;
+  }
+
+  private isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    );
+  }
+
+  private mapMessageWithProfileUrl(message: {
+    id: string;
+    channelId: string;
+    senderId: string;
+    body: string;
+    status: MessageStatus;
+    createdAt: Date;
+    deletedAt: Date | null;
+    deletedBy: string | null;
+    sender: {
+      id: string;
+      profile: {
+        username: string;
+        displayName: string;
+        avatarUrl: string | null;
+      } | null;
+    };
+  }) {
+    const frontendBaseUrl = this.config.get<string>('app.frontendBaseUrl') ?? '';
+    return {
+      ...message,
+      sender: {
+        ...message.sender,
+        profile: message.sender.profile
+          ? {
+              ...message.sender.profile,
+              profileUrl: `${frontendBaseUrl}/profiles/${message.sender.profile.username}`,
+            }
+          : null,
+      },
+    };
   }
 }

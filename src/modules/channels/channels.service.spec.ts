@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ChannelsService } from './channels.service';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 
@@ -15,9 +16,12 @@ describe('ChannelsService', () => {
       channel,
       channelMessage,
     } as unknown as PrismaService;
+    const config = {
+      get: jest.fn().mockReturnValue('http://localhost:3000'),
+    } as unknown as ConfigService;
 
     return {
-      service: new ChannelsService(prisma),
+      service: new ChannelsService(prisma, config),
       channel,
       channelMessage,
     };

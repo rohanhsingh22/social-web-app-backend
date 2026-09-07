@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(findstr:*)",
+      "Shell(npx jest src/realtime/realtime-rate-limit/realtime-rate-limit.service.spec.ts --runInBand)",
+      "Shell(npm.cmd:*)",
+      "Shell(redis-cli:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

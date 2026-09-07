@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Profile } from '@prisma/client';
@@ -10,6 +11,8 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class ProfilesService {
+  private readonly logger = new Logger(ProfilesService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async getOwnProfile(userId: string) {
@@ -18,6 +21,7 @@ export class ProfilesService {
     });
 
     if (!profile) {
+      this.logger.warn(`Profile not found for user ${userId}`);
       throw new NotFoundException('PROFILE_NOT_FOUND');
     }
 
@@ -29,28 +33,55 @@ export class ProfilesService {
       await this.assertUsernameAvailable(userId, dto.username);
     }
 
-    const nextData = {
-      ...dto,
-      dob: dto.dob ? new Date(dto.dob) : undefined,
-      ageGroup: dto.dob ? this.ageGroupFromDob(dto.dob) : undefined,
-    };
-
     const existing = await this.getOwnProfile(userId);
-    const merged = {
+
+    const characterConfig = dto.characterConfig
+      ? {
+          ...(existing.characterConfig as Record<string, unknown>),
+          ...dto.characterConfig,
+        }
+      : undefined;
+
+    const dob = dto.dob ? new Date(dto.dob) : undefined;
+    const ageGroup = dto.dob ? this.ageGroupFromDob(dto.dob) : undefined;
+
+    const mergedForCompletion = {
       ...existing,
-      ...nextData,
-      dob: nextData.dob ?? existing.dob,
-      ageGroup: nextData.ageGroup ?? existing.ageGroup,
-      languages: nextData.languages ?? existing.languages,
+      ...dto,
+      dob: dob ?? existing.dob,
+      ageGroup: ageGroup ?? existing.ageGroup,
+      languages: dto.languages ?? existing.languages,
+      characterConfig: characterConfig ?? existing.characterConfig,
     };
 
-    return this.prisma.profile.update({
-      where: { userId },
-      data: {
-        ...nextData,
-        isComplete: this.isComplete(merged),
-      },
-    });
+    try {
+      const updated = await this.prisma.profile.update({
+        where: { userId },
+        data: {
+          ...(dto.username && { username: dto.username }),
+          ...(dto.displayName && { displayName: dto.displayName }),
+          ...(dto.bio !== undefined && { bio: dto.bio }),
+          ...(dob && { dob }),
+          ...(ageGroup && { ageGroup }),
+          ...(dto.gender !== undefined && { gender: dto.gender }),
+          ...(characterConfig && { characterConfig: characterConfig as object }),
+          ...(dto.region !== undefined && { region: dto.region }),
+          ...(dto.city !== undefined && { city: dto.city }),
+          ...(dto.primaryLanguage !== undefined && { primaryLanguage: dto.primaryLanguage }),
+          ...(dto.languages && { languages: dto.languages }),
+          isComplete: this.isComplete(mergedForCompletion),
+        },
+      });
+
+      this.logger.log(`Profile updated for user ${userId}`);
+      return updated;
+    } catch (error) {
+      this.logger.error(
+        `Failed to update profile for user ${userId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
   }
 
   async getPublicProfile(username: string) {
@@ -64,6 +95,7 @@ export class ProfilesService {
         bio: true,
         ageGroup: true,
         gender: true,
+        characterConfig: true,
         region: true,
         city: true,
         primaryLanguage: true,
@@ -74,6 +106,7 @@ export class ProfilesService {
     });
 
     if (!profile) {
+      this.logger.warn(`Public profile not found for username ${username}`);
       throw new NotFoundException('PROFILE_NOT_FOUND');
     }
 
@@ -87,6 +120,9 @@ export class ProfilesService {
     });
 
     if (existing && existing.userId !== userId) {
+      this.logger.warn(
+        `Username ${username} already taken by user ${existing.userId}`,
+      );
       throw new ConflictException('USERNAME_TAKEN');
     }
   }
@@ -95,6 +131,7 @@ export class ProfilesService {
     const birthDate = new Date(dob);
 
     if (Number.isNaN(birthDate.getTime())) {
+      this.logger.warn(`Invalid DOB provided: ${dob}`);
       throw new BadRequestException('INVALID_DOB');
     }
 
@@ -110,6 +147,7 @@ export class ProfilesService {
     }
 
     if (age < 13) {
+      this.logger.warn(`Profile update rejected for DOB under minimum age: ${dob}`);
       throw new BadRequestException('MINIMUM_AGE_REQUIRED');
     }
 
