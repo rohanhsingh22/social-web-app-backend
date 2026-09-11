@@ -55,7 +55,14 @@ export class IntegrationService {
       throw new ForbiddenException('ACCOUNT_NOT_ALLOWED');
     }
 
-    const tokens = await this.sessionService.createSession(user.id, context);
+    const tokens = await this.sessionService.createSession(
+      user.id,
+      context,
+      {
+        status: user.status,
+        role: user.role,
+      },
+    );
 
     return {
       user,
@@ -82,9 +89,26 @@ export class IntegrationService {
       });
 
       if (existingIdentity) {
+        await tx.authIdentity.update({
+          where: { id: existingIdentity.id },
+          data: {
+            providerEmail: profile.email,
+            providerDisplayName: profile.displayName,
+            providerAvatarUrl: profile.avatarUrl,
+          },
+        });
+
         return tx.user.update({
           where: { id: existingIdentity.userId },
-          data: { lastLoginAt: new Date() },
+          data: {
+            lastLoginAt: new Date(),
+            profile: {
+              update: {
+                displayName: profile.displayName,
+                avatarUrl: profile.avatarUrl,
+              },
+            },
+          },
           include: { profile: true },
         });
       }

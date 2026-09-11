@@ -36,9 +36,6 @@ Status of the Social Chat App backend, what is implemented so far, and how to ru
 
 These routes exist but return placeholder/empty data and are not yet implemented:
 
-- Connections (`/connections/*`) — Phase 6.
-- User search (`/users/search`) — Phase 6.
-- Direct messages (`/dm/*` and `/dm` gateway) — Phase 7.
 - Blocks (`/blocks/*`) — Phase 8.
 - Reports (`/reports`) — Phase 8.
 - Admin moderation (`/admin/*`) — Phase 8.
@@ -54,6 +51,29 @@ These routes exist but return placeholder/empty data and are not yet implemented
 ### Profile navigation in chat
 - Messages include `profileUrl` in sender data for easy navigation
 - Logged-in users can view other users' characters by clicking names in chat
+
+### Connections and user search (Phase 6)
+- Authenticated connection request APIs are implemented with duplicate and reversed-pair prevention.
+- Accepting a connection creates or reuses a direct conversation for the pair.
+- User search returns safe public profile fields, excludes blocked relationships, and includes viewer-relative connection status.
+- Redis rate limits are enforced for connection requests and user search.
+
+### Direct messages (Phase 7)
+- Authenticated `/dm/conversations` and `/dm/conversations/:id/messages` endpoints are implemented.
+- Direct message reads and sends require conversation membership, an accepted connection, and no block between users; sends also require an allowed sender account state.
+- Socket.IO `/dm` namespace supports authenticated join/leave/send with Redis-backed per-user send rate limiting.
+
+### Moderation (Phase 8)
+- Authenticated reports can be created for users, channel messages, and accessible direct messages.
+- Authenticated blocks can be listed, created, and removed; blocking disables active/pending relationships.
+- Admin/moderator APIs can list and resolve reports, mute/ban/unmute/unban users, soft-delete channel and direct messages, manage channels, and manage banned words.
+- Admin moderation actions write audit rows to `moderation_actions`.
+- Channel and direct-message sends run basic spam and banned-word checks before messages are saved.
+
+## What still needs launch/infrastructure work
+
+- Upload APIs and profile image processing workers are still placeholders.
+- Phase 9 production readiness still needs real load-test scripts/runs, monitoring integration, deployment pipeline, and a 5,000-socket load test against deployed infrastructure.
 
 ## How to run
 
@@ -108,6 +128,25 @@ GET    http://localhost:3000/auth/me
 GET    http://localhost:3000/profiles/me
 PATCH  http://localhost:3000/profiles/me
 GET    http://localhost:3000/profiles/:username
+GET    http://localhost:3000/dm/conversations
+GET    http://localhost:3000/dm/conversations/:id/messages?cursor=...&limit=...
+POST   http://localhost:3000/reports
+GET    http://localhost:3000/blocks
+POST   http://localhost:3000/blocks
+DELETE http://localhost:3000/blocks/:blockedUserId
+GET    http://localhost:3000/admin/reports
+POST   http://localhost:3000/admin/reports/:id/resolve
+POST   http://localhost:3000/admin/users/:id/mute
+POST   http://localhost:3000/admin/users/:id/unmute
+POST   http://localhost:3000/admin/users/:id/ban
+POST   http://localhost:3000/admin/users/:id/unban
+DELETE http://localhost:3000/admin/channel-messages/:id
+DELETE http://localhost:3000/admin/direct-messages/:id
+POST   http://localhost:3000/admin/channels
+PATCH  http://localhost:3000/admin/channels/:id
+GET    http://localhost:3000/admin/banned-words
+POST   http://localhost:3000/admin/banned-words
+PATCH  http://localhost:3000/admin/banned-words/:id
 ```
 
 ### Socket events (`/channels` namespace)
@@ -126,6 +165,20 @@ Server emits:
 - `auth:error`
 - `user:muted`
 - `user:banned`
+
+### Socket events (`/dm` namespace)
+
+Client emits:
+
+- `dm:join` - `{ conversationId: string }`
+- `dm:leave` - `{ conversationId: string }`
+- `dm:message:send` - `{ conversationId: string, body: string }`
+
+Server emits:
+
+- `dm:message:new`
+- `dm:error`
+- `auth:error`
 
 ## Validation
 

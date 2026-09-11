@@ -71,7 +71,14 @@ export class AuthService {
       },
     });
 
-    const tokens = await this.sessionService.createSession(session.userId, context);
+    const tokens = await this.sessionService.createSession(
+      session.userId,
+      context,
+      {
+        status: session.user.status,
+        role: session.user.role,
+      },
+    );
 
     return {
       user: session.user,

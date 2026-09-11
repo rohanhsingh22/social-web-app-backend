@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { RedisService } from '@app/core/redis/redis.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { RedisService } from "@app/core/redis/redis.service";
 
 type RateLimitWindow = {
   limit: number;
@@ -18,6 +18,8 @@ const CHANNEL_WINDOWS: RateLimitWindow[] = [
 const PER_CHANNEL_WINDOWS: RateLimitWindow[] = [
   { limit: 30, windowSeconds: 1 },
 ];
+
+const DM_WINDOWS: RateLimitWindow[] = [{ limit: 20, windowSeconds: 60 }];
 
 @Injectable()
 export class RealtimeRateLimitService {
@@ -44,6 +46,10 @@ export class RealtimeRateLimitService {
     );
   }
 
+  async checkDirectMessage(userId: string): Promise<RateLimitResult> {
+    return this.checkWindows(`ratelimit:dm:user:${userId}`, DM_WINDOWS);
+  }
+
   private async checkWindows(
     baseKey: string,
     windows: RateLimitWindow[],
@@ -53,12 +59,11 @@ export class RealtimeRateLimitService {
       const results = await this.redis.connection
         .multi()
         .incr(key)
-        .expire(key, window.windowSeconds, 'NX')
+        .expire(key, window.windowSeconds, "NX")
         .ttl(key)
         .exec();
 
-      const [[incrError, countResult], , [ttlError, ttlResult]] =
-        results ?? [];
+      const [[incrError, countResult], , [ttlError, ttlResult]] = results ?? [];
 
       if (incrError) {
         this.logger.error(

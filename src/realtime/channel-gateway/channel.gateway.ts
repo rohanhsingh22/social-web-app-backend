@@ -83,6 +83,8 @@ export class ChannelGateway
       await this.auth.authenticate(socket);
     } catch (error) {
       const isForbidden = error instanceof ForbiddenException;
+      const message =
+        error instanceof Error ? error.message : 'Authentication failed';
 
       this.logger.warn(
         `Realtime authentication failed for socket ${socket.id}`,
@@ -90,10 +92,16 @@ export class ChannelGateway
       );
 
       socket.emit('auth:error', {
-        code: isForbidden ? 'ACCOUNT_NOT_ALLOWED' : 'INVALID_ACCESS_TOKEN',
+        code: isForbidden
+          ? 'ACCOUNT_NOT_ALLOWED'
+          : message === 'SESSION_EXPIRED'
+            ? 'SESSION_EXPIRED'
+            : 'INVALID_ACCESS_TOKEN',
         message: isForbidden
           ? 'Your account is not allowed to connect.'
-          : 'Your session is invalid or expired.',
+          : message === 'SESSION_EXPIRED'
+            ? 'Your session has expired. Please refresh your token.'
+            : 'Your session is invalid or expired.',
       });
 
       socket.disconnect(true);

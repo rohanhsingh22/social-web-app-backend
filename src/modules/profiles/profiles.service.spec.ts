@@ -101,6 +101,7 @@ describe('ProfilesService', () => {
         bio: true,
         ageGroup: true,
         gender: true,
+        characterConfig: true,
         region: true,
         city: true,
         primaryLanguage: true,

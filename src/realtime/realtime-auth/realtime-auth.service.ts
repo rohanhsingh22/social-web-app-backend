@@ -1,13 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Socket } from 'socket.io';
-import { AuthService } from '@app/modules/auth/auth.service';
-import { AuthenticatedUser } from '@app/modules/auth/auth.types';
+import { Injectable, Logger } from "@nestjs/common";
+import { Socket } from "socket.io";
+import { AuthService } from "@app/modules/auth/auth.service";
+import { AuthenticatedUser } from "@app/modules/auth/auth.types";
 
 export type RealtimeSocket = Socket & {
   data: {
     user?: AuthenticatedUser;
     isGuest: boolean;
     joinedChannelIds: Set<string>;
+    joinedDmConversationIds: Set<string>;
   };
 };
 
@@ -20,6 +21,7 @@ export class RealtimeAuthService {
   async authenticate(socket: RealtimeSocket): Promise<void> {
     socket.data.isGuest = true;
     socket.data.joinedChannelIds = new Set();
+    socket.data.joinedDmConversationIds = new Set();
 
     const token = this.extractToken(socket);
 
@@ -35,8 +37,8 @@ export class RealtimeAuthService {
   private extractToken(socket: Socket): string | undefined {
     const authHeader = socket.handshake.headers.authorization;
 
-    if (authHeader?.startsWith('Bearer ')) {
-      return authHeader.slice('Bearer '.length);
+    if (authHeader?.startsWith("Bearer ")) {
+      return authHeader.slice("Bearer ".length);
     }
 
     const authToken = socket.handshake.auth?.token as string | undefined;

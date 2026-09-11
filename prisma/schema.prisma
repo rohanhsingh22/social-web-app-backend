@@ -80,6 +80,7 @@ model User {
   identities        AuthIdentity[]
   sessions          Session[]
   profile           Profile?
+  settings          UserSettings?
   channelMessages   ChannelMessage[]   @relation("ChannelMessageSender")
   deletedMessages   ChannelMessage[]   @relation("ChannelMessageDeletedBy")
   connectionsSent   Connection[]       @relation("ConnectionRequester")
@@ -305,4 +306,16 @@ model BannedWord {
   createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("banned_words")
+}
+
+model UserSettings {
+  userId            String   @id @map("user_id") @db.Uuid
+  theme             String   @default("system") @map("theme")
+  accentColor       String   @default("blue") @map("accent_color")
+  profileVisibility Json     @default("{}") @map("profile_visibility")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
 }

@@ -4,7 +4,7 @@
 
 This is an independent personal project.
 
-The backend powers a live social chat website with public read-only channels for guests, Facebook-only login, live channel messaging for authenticated users, connection requests, profiles, and one-to-one private chat between accepted connections.
+The backend powers a live social chat website with public read-only channels for guests, Facebook and Google login, live channel messaging for authenticated users, connection requests, profiles, user settings, and one-to-one private chat between accepted connections.
 
 ## 2. Scale Target
 
@@ -34,7 +34,7 @@ This avoids unnecessary microservice complexity while still supporting scale.
 
 The API app handles normal HTTP APIs:
 
-- Facebook auth start and callback.
+- Facebook and Google auth start and callback.
 - Session/token refresh.
 - Logout.
 - Current user.
@@ -163,30 +163,30 @@ Worker app modules:
 - CleanupWorkerModule
 - ImageWorkerModule
 
-## 10. Facebook-Only Authentication
+## 10. Social OAuth Authentication
 
-V1 must support only Facebook Authentication.
+V1 supports Facebook Authentication and Google Authentication.
 
-There must be no password login, email login, OTP login, Google login, or Apple login in V1.
+There must be no password login, email login, OTP login, or Apple login in V1.
 
-Required Facebook OAuth flow:
+Required social OAuth flow:
 
-1. Frontend sends user to backend route: `GET /auth/facebook`.
-2. Backend redirects to Facebook OAuth.
-3. User authorizes app on Facebook.
-4. Facebook redirects to backend route: `GET /auth/facebook/callback`.
-5. Backend verifies Facebook response.
-6. Backend fetches Facebook profile.
+1. Frontend sends user to backend route: `GET /auth/facebook` or `GET /auth/google`.
+2. Backend redirects to the selected OAuth provider.
+3. User authorizes app with the provider.
+4. Provider redirects to backend callback route.
+5. Backend verifies provider response.
+6. Backend fetches provider profile.
 7. Backend creates or finds app user.
 8. Backend creates session.
 9. Backend redirects user back to frontend.
 
-Recommended Facebook permissions:
+Recommended provider permissions:
 
 - `public_profile`
 - `email`, if required and approved by Facebook
 
-Do not request unnecessary Facebook permissions in V1.
+Do not request unnecessary OAuth permissions in V1.
 
 ## 11. Auth Data Model
 
@@ -212,7 +212,7 @@ Auth identities table:
 
 For V1:
 
-- `provider` is always `facebook`.
+- `provider` is `facebook` or `google`.
 - `provider_user_id` must be unique with provider.
 
 Sessions table:
@@ -234,9 +234,9 @@ Recommended auth strategy:
 
 ## 12. First Login User Creation
 
-When a Facebook user logs in for the first time:
+When a social OAuth user logs in for the first time:
 
-1. Check `auth_identities` by `provider = facebook` and `provider_user_id`.
+1. Check `auth_identities` by `provider` and `provider_user_id`.
 2. If found, login existing user.
 3. If not found, create user.
 4. Create auth identity.
@@ -245,9 +245,9 @@ When a Facebook user logs in for the first time:
 
 Initial profile can use:
 
-- Facebook display name.
-- Facebook avatar.
-- Facebook email if available.
+- Provider display name.
+- Provider avatar.
+- Provider email if available.
 
 App-specific required fields must still be collected:
 
@@ -709,6 +709,9 @@ Accepted connection rules:
 
 - `GET /auth/facebook`
 - `GET /auth/facebook/callback`
+- `GET /auth/google`
+- `GET /auth/google/callback`
+- `GET /auth/providers`
 - `POST /auth/refresh`
 - `POST /auth/logout`
 - `GET /auth/me`
@@ -1092,6 +1095,9 @@ Required environment variables:
 - `FACEBOOK_APP_ID`
 - `FACEBOOK_APP_SECRET`
 - `FACEBOOK_CALLBACK_URL`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_CALLBACK_URL`
 - `COOKIE_DOMAIN`
 - `CORS_ORIGINS`
 - `S3_BUCKET`
@@ -1108,6 +1114,8 @@ Backend tests:
 
 - Facebook auth user creation.
 - Existing Facebook user login.
+- Google auth user creation.
+- Existing Google user login.
 - Profile completion.
 - Guest channel read access.
 - Guest message send blocked.
@@ -1136,9 +1144,9 @@ Phase 1: Foundation
 - Add logging.
 - Add health checks.
 
-Phase 2: Facebook Auth
+Phase 2: Social OAuth Auth
 
-- Create Facebook OAuth flow.
+- Create Facebook and Google OAuth flow.
 - Create users table.
 - Create auth identities table.
 - Create sessions table.
@@ -1210,7 +1218,6 @@ Do not build in V1:
 
 - Email/password login.
 - OTP login.
-- Google login.
 - Apple login.
 - Posts/feed.
 - Stories.
@@ -1237,7 +1244,7 @@ Build V1 with:
 - PostgreSQL.
 - Redis.
 - Object storage.
-- Facebook-only auth.
+- Facebook and Google auth.
 - Admin moderation.
 - Load testing before public launch.
 

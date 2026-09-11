@@ -7,6 +7,7 @@ import { AuthModule } from '@app/modules/auth/auth.module';
 import { IntegrationModule } from '@app/modules/integration/integration.module';
 import { UsersModule } from '@app/modules/users/users.module';
 import { ProfilesModule } from '@app/modules/profiles/profiles.module';
+import { UserSettingsModule } from '@app/modules/user-settings/user-settings.module';
 import { ChannelsModule } from '@app/modules/channels/channels.module';
 import { ConnectionsModule } from '@app/modules/connections/connections.module';
 import { DirectMessagesModule } from '@app/modules/direct-messages/direct-messages.module';
@@ -34,6 +35,7 @@ import { UploadsModule } from '@app/modules/uploads/uploads.module';
     IntegrationModule,
     UsersModule,
     ProfilesModule,
+    UserSettingsModule,
     ChannelsModule,
     ConnectionsModule,
     DirectMessagesModule,

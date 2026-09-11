@@ -2,6 +2,8 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ChannelsService } from './channels.service';
 import { PrismaService } from '@app/core/prisma/prisma.service';
+import { RedisService } from '@app/core/redis/redis.service';
+import { ModerationService } from '@app/modules/moderation/moderation.service';
 
 describe('ChannelsService', () => {
   const createService = () => {
@@ -12,6 +14,11 @@ describe('ChannelsService', () => {
     const channelMessage = {
       findMany: jest.fn(),
     };
+    const redisConnection = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue('OK'),
+      del: jest.fn().mockResolvedValue(1),
+    };
     const prisma = {
       channel,
       channelMessage,
@@ -19,11 +26,19 @@ describe('ChannelsService', () => {
     const config = {
       get: jest.fn().mockReturnValue('http://localhost:3000'),
     } as unknown as ConfigService;
+    const redis = {
+      connection: redisConnection,
+    } as unknown as RedisService;
+    const moderation = {
+      assertMessageAllowed: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModerationService;
 
     return {
-      service: new ChannelsService(prisma, config),
+      service: new ChannelsService(prisma, config, redis, moderation),
       channel,
       channelMessage,
+      redisConnection,
+      moderation,
     };
   };
 
@@ -53,6 +68,19 @@ describe('ChannelsService', () => {
       slug: 'english',
     });
     expect(channel.findFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses channel metadata cached by the public channel list', async () => {
+    const { service, channel, channelMessage } = createService();
+    const cachedChannel = { id: 'channel-id', slug: 'general' };
+    channel.findMany.mockResolvedValue([cachedChannel]);
+    channelMessage.findMany.mockResolvedValue([]);
+
+    await service.listPublicChannels();
+    await service.getMessages('general', undefined, '50');
+
+    expect(channel.findFirst).not.toHaveBeenCalled();
+    expect(channelMessage.findMany).toHaveBeenCalledTimes(1);
   });
 
   it('throws when a requested channel does not exist', async () => {
@@ -93,7 +121,13 @@ describe('ChannelsService', () => {
           {
             id: 'message-2',
             createdAt: new Date('2026-05-16T06:02:00.000Z'),
-            sender: { id: 'user-2', profile: { username: 'two' } },
+            sender: {
+              id: 'user-2',
+              profile: {
+                username: 'two',
+                profileUrl: 'http://localhost:3000/profiles/two',
+              },
+            },
           },
         ],
         pageInfo: {
