@@ -203,6 +203,14 @@ VALUES
   ('General', 'general', 'general', true, 0),
   ('English', 'english', 'language', false, 10),
   ('Hindi', 'hindi', 'language', false, 20),
-  ('Gaming', 'gaming', 'general', false, 30),
-  ('Study', 'study', 'general', false, 40),
-  ('Music', 'music', 'general', false, 50);
+  ('Bengali', 'bengali', 'language', false, 30),
+  ('Marathi', 'marathi', 'language', false, 40),
+  ('Telugu', 'telugu', 'language', false, 50),
+  ('Tamil', 'tamil', 'language', false, 60),
+  ('Gujarati', 'gujarati', 'language', false, 70),
+  ('Urdu', 'urdu', 'language', false, 80),
+  ('Kannada', 'kannada', 'language', false, 90),
+  ('Odia', 'odia', 'language', false, 100),
+  ('Malayalam', 'malayalam', 'language', false, 110),
+  ('Assamese', 'assamese', 'language', false, 120),
+  ('Nepali', 'nepali', 'language', false, 130);

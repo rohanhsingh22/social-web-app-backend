@@ -39,9 +39,14 @@ describe('BlocksService', () => {
   };
 
   it('rejects self-blocks', async () => {
-    const { service } = createService();
+    const { service, prisma } = createService();
+    jest.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: 'user-a',
+      status: UserStatus.active,
+      publicUserId: 'HT-7K4M9Q2X',
+    } as never);
 
-    await expect(service.create('user-a', 'user-a')).rejects.toThrow(
+    await expect(service.create('user-a', 'HT-7K4M9Q2X')).rejects.toThrow(
       BadRequestException,
     );
   });
@@ -50,9 +55,18 @@ describe('BlocksService', () => {
     const { service, prisma } = createService();
     jest.mocked(prisma.user.findUnique).mockResolvedValue(null);
 
-    await expect(service.create('user-a', 'missing')).rejects.toThrow(
+    await expect(service.create('user-a', 'HT-ZZZZZZZZ')).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  it('rejects invalid public ID formats as not found', async () => {
+    const { service, prisma } = createService();
+
+    await expect(service.create('user-a', 'user-b')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 
   it('creates a block and marks the relationship blocked', async () => {
@@ -60,6 +74,7 @@ describe('BlocksService', () => {
     jest.mocked(prisma.user.findUnique).mockResolvedValue({
       id: 'user-b',
       status: UserStatus.active,
+      publicUserId: 'HT-A8N4P7ZK',
     } as never);
     tx.block.upsert.mockResolvedValue({
       id: 'block-id',
@@ -69,12 +84,16 @@ describe('BlocksService', () => {
       blockedUser: { id: 'user-b', profile: null },
     });
 
-    await expect(service.create('user-a', 'user-b')).resolves.toEqual(
+    await expect(service.create('user-a', 'ht-a8n4p7zk')).resolves.toEqual(
       expect.objectContaining({
         id: 'block-id',
         blockedUserId: 'user-b',
       }),
     );
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { publicUserId: 'HT-A8N4P7ZK' },
+      select: { id: true, status: true, publicUserId: true },
+    });
     expect(tx.connection.updateMany).toHaveBeenCalledWith({
       where: {
         userLowId: 'user-a',

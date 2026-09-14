@@ -14,11 +14,10 @@ export class UsersController {
   async search(
     @CurrentUser() user: AuthenticatedUser,
     @Query("q") query = "",
-    @Query("limit") limit?: string,
   ) {
     return envelope({
       query,
-      users: await this.usersService.search(user.id, query, limit),
+      users: await this.usersService.search(user.id, query),
     });
   }
 }

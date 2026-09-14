@@ -28,10 +28,12 @@ export class ProfilesController {
     });
   }
 
-  @Get(':username')
-  async getPublicProfile(@Param('username') username: string) {
+ @Get(':publicUserId')
+  async getUserProfile(
+    @Param('publicUserId') publicUserId: string,
+  ) {
     return envelope({
-      profile: await this.profilesService.getPublicProfile(username),
+      profile: await this.profilesService.getUserProfile(publicUserId),
     });
   }
 }

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConnectionStatus, Prisma, UserStatus } from '@prisma/client';
+import { normalizePublicUserId } from '@app/common/public-user-id';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 
 type BlockWithUser = Prisma.BlockGetPayload<{
@@ -33,19 +34,27 @@ export class BlocksService {
     return blocks.map((block) => this.mapBlock(block));
   }
 
-  async create(blockerId: string, blockedUserId: string) {
-    if (blockerId === blockedUserId) {
-      throw new BadRequestException('CANNOT_BLOCK_SELF');
+  async create(blockerId: string, blockedPublicUserId: string) {
+    const publicUserId = normalizePublicUserId(blockedPublicUserId);
+
+    if (!publicUserId) {
+      throw new NotFoundException('USER_NOT_FOUND');
     }
 
     const blockedUser = await this.prisma.user.findUnique({
-      where: { id: blockedUserId },
-      select: { id: true, status: true },
+      where: { publicUserId },
+      select: { id: true, status: true, publicUserId: true },
     });
 
     if (!blockedUser || blockedUser.status === UserStatus.deleted) {
       throw new NotFoundException('USER_NOT_FOUND');
     }
+
+    if (blockerId === blockedUser.id) {
+      throw new BadRequestException('CANNOT_BLOCK_SELF');
+    }
+
+    const blockedUserId = blockedUser.id;
 
     const { userLowId, userHighId } = this.normalizedPair(
       blockerId,
@@ -83,7 +92,24 @@ export class BlocksService {
     return this.mapBlock(block);
   }
 
-  async remove(blockerId: string, blockedUserId: string) {
+  async remove(blockerId: string, blockedPublicUserId: string) {
+    const publicUserId = normalizePublicUserId(blockedPublicUserId);
+
+    if (!publicUserId) {
+      throw new NotFoundException('USER_NOT_FOUND');
+    }
+
+    const blockedUser = await this.prisma.user.findUnique({
+      where: { publicUserId },
+      select: { id: true },
+    });
+
+    if (!blockedUser) {
+      throw new NotFoundException('USER_NOT_FOUND');
+    }
+
+    const blockedUserId = blockedUser.id;
+
     const deleted = await this.prisma.block.deleteMany({
       where: { blockerId, blockedUserId },
     });
@@ -96,7 +122,7 @@ export class BlocksService {
       data: { status: ConnectionStatus.cancelled },
     });
 
-    return { blockedUserId, removed: deleted.count > 0 };
+    return { blockedUserId: publicUserId, removed: deleted.count > 0 };
   }
 
   private normalizedPair(firstUserId: string, secondUserId: string) {

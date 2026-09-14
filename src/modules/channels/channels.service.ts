@@ -313,6 +313,7 @@ export class ChannelsService {
         sender: {
           select: {
             id: true,
+            publicUserId: true,
             profile: {
               select: {
                 username: true,

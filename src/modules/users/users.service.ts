@@ -1,12 +1,22 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { ConnectionStatus, UserStatus } from "@prisma/client";
 import { RateLimitService } from "@app/common/rate-limit.service";
+import { normalizePublicUserId } from "@app/common/public-user-id";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 
-const DEFAULT_SEARCH_LIMIT = 20;
-const MAX_SEARCH_LIMIT = 50;
 const SEARCH_RATE_LIMIT = 60;
 const SEARCH_WINDOW_SECONDS = 60;
+
+const publicProfileSelect = {
+  username: true,
+  displayName: true,
+  avatarUrl: true,
+  bio: true,
+  ageGroup: true,
+  region: true,
+  primaryLanguage: true,
+  languages: true,
+} as const;
 
 @Injectable()
 export class UsersService {
@@ -15,74 +25,55 @@ export class UsersService {
     private readonly rateLimit: RateLimitService,
   ) {}
 
-  async search(viewerId: string, query = "", limitValue?: string) {
+  async search(viewerId: string, query = "", _limitValue?: string) {
     await this.rateLimit.assertAllowed(
       `ratelimit:users:search:${viewerId}`,
       SEARCH_RATE_LIMIT,
       SEARCH_WINDOW_SECONDS,
     );
 
-    const q = query.trim();
+    const publicUserId = normalizePublicUserId(query);
 
-    if (q.length < 2) {
+    if (!publicUserId) {
       return [];
     }
 
-    const limit = this.parseLimit(limitValue);
-
-    const profiles = await this.prisma.profile.findMany({
+    const user = await this.prisma.user.findFirst({
       where: {
-        userId: { not: viewerId },
-        OR: [
-          { username: { contains: q, mode: "insensitive" } },
-          { displayName: { contains: q, mode: "insensitive" } },
-        ],
-        user: {
-          status: UserStatus.active,
-          blocksMade: { none: { blockedUserId: viewerId } },
-          blocksReceived: { none: { blockerId: viewerId } },
-        },
+        publicUserId,
+        id: { not: viewerId },
+        status: UserStatus.active,
+        blocksMade: { none: { blockedUserId: viewerId } },
+        blocksReceived: { none: { blockerId: viewerId } },
+        profile: { isNot: null },
       },
-      take: limit,
-      orderBy: [{ displayName: "asc" }, { username: "asc" }],
       select: {
-        userId: true,
-        username: true,
-        displayName: true,
-        avatarUrl: true,
-        bio: true,
-        ageGroup: true,
-        region: true,
-        primaryLanguage: true,
-        languages: true,
+        id: true,
+        publicUserId: true,
+        profile: {
+          select: publicProfileSelect,
+        },
       },
     });
 
-    const userIds = profiles.map((profile) => profile.userId);
-    const connections = userIds.length
-      ? await this.prisma.connection.findMany({
-          where: {
-            OR: userIds.map((userId) => this.connectionWhere(viewerId, userId)),
-          },
-          select: {
-            id: true,
-            requesterId: true,
-            receiverId: true,
-            status: true,
-          },
-        })
-      : [];
+    if (!user?.profile) {
+      return [];
+    }
 
-    return profiles.map((profile) => {
-      const connection = connections.find(
-        (item) =>
-          item.requesterId === profile.userId ||
-          item.receiverId === profile.userId,
-      );
+    const connection = await this.prisma.connection.findFirst({
+      where: this.connectionWhere(viewerId, user.id),
+      select: {
+        id: true,
+        requesterId: true,
+        receiverId: true,
+        status: true,
+      },
+    });
 
-      return {
-        id: profile.userId,
-        profile,
+    return [
+      {
+        id: user.publicUserId,
+        profile: user.profile,
         connection: connection
           ? {
               id: connection.id,
@@ -93,8 +84,8 @@ export class UsersService {
                   : null,
             }
           : null,
-      };
-    });
+      },
+    ];
   }
 
   private connectionWhere(viewerId: string, otherUserId: string) {
@@ -107,15 +98,5 @@ export class UsersService {
     connection: { requesterId: string; receiverId: string },
   ) {
     return connection.requesterId === viewerId ? "sent" : "received";
-  }
-
-  private parseLimit(value?: string) {
-    const limit = Number(value ?? DEFAULT_SEARCH_LIMIT);
-
-    if (!Number.isInteger(limit) || limit < 1) {
-      throw new BadRequestException("INVALID_LIMIT");
-    }
-
-    return Math.min(limit, MAX_SEARCH_LIMIT);
   }
 }

@@ -114,7 +114,9 @@ describe("ConnectionsService", () => {
       .mocked(prisma.connection.create)
       .mockResolvedValue(connection as never);
 
-    await expect(service.createRequest("user-b", "user-a")).resolves.toEqual(
+    await expect(
+      service.createRequest("user-b", "HT-7K4M9Q2X"),
+    ).resolves.toEqual(
       expect.objectContaining({
         id: "connection-id",
         status: ConnectionStatus.pending,
@@ -125,6 +127,12 @@ describe("ConnectionsService", () => {
       "ratelimit:connections:requests:user-b",
       30,
       86_400,
+    );
+    expect(prisma.user.findUnique).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { publicUserId: "HT-7K4M9Q2X" },
+      }),
     );
     expect(prisma.connection.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -155,9 +163,9 @@ describe("ConnectionsService", () => {
       .mocked(prisma.connection.findUnique)
       .mockResolvedValue(connection as never);
 
-    await expect(service.createRequest("user-a", "user-b")).rejects.toThrow(
-      ConflictException,
-    );
+    await expect(
+      service.createRequest("user-a", "HT-A8N4P7ZK"),
+    ).rejects.toThrow(ConflictException);
   });
 
   it("rejects requests when either user blocked the other", async () => {
@@ -176,9 +184,24 @@ describe("ConnectionsService", () => {
       .mocked(prisma.block.findFirst)
       .mockResolvedValue({ id: "block-id" } as never);
 
-    await expect(service.createRequest("user-a", "user-b")).rejects.toThrow(
-      ForbiddenException,
-    );
+    await expect(
+      service.createRequest("user-a", "HT-A8N4P7ZK"),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it("rejects unknown public IDs as not found", async () => {
+    const { service, prisma } = createService();
+    jest
+      .mocked(prisma.user.findUnique)
+      .mockResolvedValueOnce({
+        id: "user-a",
+        status: UserStatus.active,
+      } as never)
+      .mockResolvedValueOnce(null);
+
+    await expect(
+      service.createRequest("user-a", "HT-ZZZZZZZZ"),
+    ).rejects.toThrow(NotFoundException);
   });
 
   it("accepts a pending request and creates a direct conversation", async () => {

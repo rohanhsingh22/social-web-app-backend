@@ -38,6 +38,7 @@ describe('ProfilesService', () => {
         isComplete: false,
         createdAt: new Date('2026-05-16T06:00:00.000Z'),
         updatedAt: new Date('2026-05-16T06:00:00.000Z'),
+        user: { publicUserId: 'HT-7K4M9Q2X' },
       });
     profile.update.mockResolvedValue({
       userId: 'user-id',
@@ -58,6 +59,7 @@ describe('ProfilesService', () => {
       userId: 'user-id',
       username: 'new_name',
       isComplete: true,
+      publicUserId: 'HT-7K4M9Q2X',
     });
     expect(profile.update).toHaveBeenCalledWith({
       where: { userId: 'user-id' },

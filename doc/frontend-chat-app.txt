@@ -244,14 +244,14 @@ It must include:
 - Accepted connections list.
 - Pending received requests.
 - Pending sent requests.
-- Search users.
+- Find someone by HiRotoli ID.
 - One-to-one chat entry points.
 
 Guest users who click Connections should see Facebook login prompt.
 
 ## 12. Connection Request UX
 
-Logged-in users can search or discover other users and send connection requests.
+Logged-in users can look up another user by their HiRotoli public ID and send connection requests.
 
 Connection states:
 
@@ -378,14 +378,23 @@ If users under 18 are allowed, the frontend must support safety boundaries:
 
 The backend must enforce the real restrictions. Frontend is only the interface.
 
-## 18. User Search
+## 18. User Search (HiRotoli ID lookup)
 
-User search is available only after login.
+Finding someone is available only after login.
 
-Search should allow:
+HiRotoli does **not** provide general discovery by username or display name.
 
-- Username.
-- Display name.
+Users look each other up **only by exact HiRotoli public ID**, for example:
+
+- `HT-7K4M9Q2X`
+
+UI copy should say "Find someone" / "Enter HiRotoli ID", not "Search users" or "Search by name".
+
+Placeholder example: `HT-7K4M9Q2X` or `Enter HiRotoli ID`.
+
+Lookup is exact (case-insensitive). No autocomplete, fuzzy match, or multiple results.
+
+Empty state: `No user found with this HiRotoli ID.`
 
 Search should not expose:
 
@@ -394,8 +403,9 @@ Search should not expose:
 - Facebook ID.
 - Exact age.
 - Full DOB.
+- Internal database UUID.
 
-Search results should show:
+When a match is found, show a single result card:
 
 - Avatar.
 - Display name.
@@ -403,6 +413,8 @@ Search results should show:
 - Age group if allowed.
 - Region if allowed.
 - Connection action button.
+
+The user's own profile should display their HiRotoli ID with a copy action.
 
 ## 19. Reporting And Blocking UX
 

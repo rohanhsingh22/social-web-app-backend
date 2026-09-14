@@ -5,10 +5,13 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
+import { generatePublicUserId } from '@app/common/public-user-id';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { SessionService, SessionContext } from '@app/core/session/session.service';
 import { ProviderRegistry } from './providers/provider.registry';
 import { NormalizedProfile, ProviderInfo } from './providers/oauth-provider.interface';
+
+const PUBLIC_USER_ID_CREATE_ATTEMPTS = 5;
 
 type LoginResult = {
   user: {
@@ -71,73 +74,120 @@ export class IntegrationService {
   }
 
   private async upsertUser(providerId: string, profile: NormalizedProfile) {
-    return this.prisma.$transaction(async (tx) => {
-      const existingIdentity = await tx.authIdentity.findUnique({
-        where: {
-          provider_providerUserId: {
-            provider: providerId,
-            providerUserId: profile.providerUserId,
-          },
-        },
-        include: {
-          user: {
-            include: {
-              profile: true,
-            },
-          },
-        },
-      });
-
-      if (existingIdentity) {
-        await tx.authIdentity.update({
-          where: { id: existingIdentity.id },
-          data: {
-            providerEmail: profile.email,
-            providerDisplayName: profile.displayName,
-            providerAvatarUrl: profile.avatarUrl,
-          },
-        });
-
-        return tx.user.update({
-          where: { id: existingIdentity.userId },
-          data: {
-            lastLoginAt: new Date(),
-            profile: {
-              update: {
-                displayName: profile.displayName,
-                avatarUrl: profile.avatarUrl,
+    for (let attempt = 0; attempt < PUBLIC_USER_ID_CREATE_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const existingIdentity = await tx.authIdentity.findUnique({
+            where: {
+              provider_providerUserId: {
+                provider: providerId,
+                providerUserId: profile.providerUserId,
               },
             },
-          },
-          include: { profile: true },
-        });
-      }
+            include: {
+              user: {
+                include: {
+                  profile: true,
+                },
+              },
+            },
+          });
 
-      return tx.user.create({
-        data: {
-          lastLoginAt: new Date(),
-          identities: {
-            create: {
-              provider: providerId,
-              providerUserId: profile.providerUserId,
-              providerEmail: profile.email,
-              providerDisplayName: profile.displayName,
-              providerAvatarUrl: profile.avatarUrl,
+          if (existingIdentity) {
+            await tx.authIdentity.update({
+              where: { id: existingIdentity.id },
+              data: {
+                providerEmail: profile.email,
+                providerDisplayName: profile.displayName,
+                providerAvatarUrl: profile.avatarUrl,
+              },
+            });
+
+            return tx.user.update({
+              where: { id: existingIdentity.userId },
+              data: {
+                lastLoginAt: new Date(),
+                profile: {
+                  update: {
+                    displayName: profile.displayName,
+                    avatarUrl: profile.avatarUrl,
+                  },
+                },
+              },
+              include: { profile: true },
+            });
+          }
+
+          return tx.user.create({
+            data: {
+              publicUserId: generatePublicUserId(),
+              lastLoginAt: new Date(),
+              identities: {
+                create: {
+                  provider: providerId,
+                  providerUserId: profile.providerUserId,
+                  providerEmail: profile.email,
+                  providerDisplayName: profile.displayName,
+                  providerAvatarUrl: profile.avatarUrl,
+                },
+              },
+              profile: {
+                create: {
+                  username: await this.createUniqueUsername(
+                    tx,
+                    profile.displayName,
+                  ),
+                  displayName: profile.displayName,
+                  avatarUrl: profile.avatarUrl,
+                  languages: [],
+                  isComplete: false,
+                },
+              },
             },
-          },
-          profile: {
-            create: {
-              username: await this.createUniqueUsername(tx, profile.displayName),
-              displayName: profile.displayName,
-              avatarUrl: profile.avatarUrl,
-              languages: [],
-              isComplete: false,
-            },
-          },
-        },
-        include: { profile: true },
-      });
-    });
+            include: { profile: true },
+          });
+        });
+      } catch (error) {
+        if (
+          this.isPublicUserIdUniqueConflict(error) &&
+          attempt < PUBLIC_USER_ID_CREATE_ATTEMPTS - 1
+        ) {
+          this.logger.warn(
+            `publicUserId collision on OAuth signup; retrying (attempt ${attempt + 1})`,
+          );
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new Error('Failed to allocate unique publicUserId');
+  }
+
+  private isPublicUserIdUniqueConflict(error: unknown): boolean {
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+      error.code !== 'P2002'
+    ) {
+      return false;
+    }
+
+    const target = error.meta?.target;
+    if (typeof target === 'string') {
+      return target.includes('public_user_id') || target.includes('publicUserId');
+    }
+
+    if (Array.isArray(target)) {
+      return target.some(
+        (value) =>
+          value === 'public_user_id' ||
+          value === 'publicUserId' ||
+          (typeof value === 'string' && value.includes('public_user_id')),
+      );
+    }
+
+    return false;
   }
 
   private async createUniqueUsername(

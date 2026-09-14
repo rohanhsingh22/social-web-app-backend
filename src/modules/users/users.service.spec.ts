@@ -1,4 +1,3 @@
-import { BadRequestException } from "@nestjs/common";
 import { ConnectionStatus } from "@prisma/client";
 import { RateLimitService } from "@app/common/rate-limit.service";
 import { PrismaService } from "@app/core/prisma/prisma.service";
@@ -7,11 +6,11 @@ import { UsersService } from "./users.service";
 describe("UsersService", () => {
   const createService = () => {
     const prisma = {
-      profile: {
-        findMany: jest.fn(),
+      user: {
+        findFirst: jest.fn(),
       },
       connection: {
-        findMany: jest.fn(),
+        findFirst: jest.fn(),
       },
     } as unknown as PrismaService;
     const rateLimit = {
@@ -25,23 +24,28 @@ describe("UsersService", () => {
     };
   };
 
-  it("returns no results for short queries but still rate limits enumeration", async () => {
+  it("rate limits and returns no results for invalid public IDs without querying", async () => {
     const { service, prisma, rateLimit } = createService();
 
     await expect(service.search("viewer-id", "a")).resolves.toEqual([]);
+    await expect(service.search("viewer-id", "rohan")).resolves.toEqual([]);
+    await expect(service.search("viewer-id", "HT-7K4")).resolves.toEqual([]);
+    await expect(service.search("viewer-id", "Rohan")).resolves.toEqual([]);
+
     expect(rateLimit.assertAllowed).toHaveBeenCalledWith(
       "ratelimit:users:search:viewer-id",
       60,
       60,
     );
-    expect(prisma.profile.findMany).not.toHaveBeenCalled();
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
   });
 
-  it("searches safe profile fields and adds viewer-relative connection status", async () => {
+  it("looks up an exact public ID case-insensitively and enriches connection status", async () => {
     const { service, prisma } = createService();
-    jest.mocked(prisma.profile.findMany).mockResolvedValue([
-      {
-        userId: "user-a",
+    jest.mocked(prisma.user.findFirst).mockResolvedValue({
+      id: "internal-user-a",
+      publicUserId: "HT-7K4M9Q2X",
+      profile: {
         username: "alice",
         displayName: "Alice",
         avatarUrl: null,
@@ -51,19 +55,19 @@ describe("UsersService", () => {
         primaryLanguage: "Hindi",
         languages: ["Hindi"],
       },
-    ] as never);
-    jest.mocked(prisma.connection.findMany).mockResolvedValue([
-      {
-        id: "connection-id",
-        requesterId: "viewer-id",
-        receiverId: "user-a",
-        status: ConnectionStatus.pending,
-      },
-    ] as never);
+    } as never);
+    jest.mocked(prisma.connection.findFirst).mockResolvedValue({
+      id: "connection-id",
+      requesterId: "viewer-id",
+      receiverId: "internal-user-a",
+      status: ConnectionStatus.pending,
+    } as never);
 
-    await expect(service.search("viewer-id", "ali", "5")).resolves.toEqual([
+    await expect(
+      service.search("viewer-id", "  ht-7k4m9q2x  "),
+    ).resolves.toEqual([
       {
-        id: "user-a",
+        id: "HT-7K4M9Q2X",
         profile: expect.objectContaining({
           username: "alice",
           ageGroup: "26-35",
@@ -75,25 +79,34 @@ describe("UsersService", () => {
         },
       },
     ]);
-    expect(prisma.profile.findMany).toHaveBeenCalledWith(
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          userId: { not: "viewer-id" },
-          user: expect.objectContaining({
-            blocksMade: { none: { blockedUserId: "viewer-id" } },
-            blocksReceived: { none: { blockerId: "viewer-id" } },
-          }),
+          publicUserId: "HT-7K4M9Q2X",
+          id: { not: "viewer-id" },
+          blocksMade: { none: { blockedUserId: "viewer-id" } },
+          blocksReceived: { none: { blockerId: "viewer-id" } },
         }),
-        take: 5,
+      }),
+    );
+    expect(prisma.connection.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userLowId: "internal-user-a",
+          userHighId: "viewer-id",
+        },
       }),
     );
   });
 
-  it("rejects invalid limits", async () => {
-    const { service } = createService();
+  it("returns an empty list when no active unblocked user matches", async () => {
+    const { service, prisma } = createService();
+    jest.mocked(prisma.user.findFirst).mockResolvedValue(null);
 
-    await expect(service.search("viewer-id", "alice", "zero")).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      service.search("viewer-id", "HT-ZZZZZZZZ"),
+    ).resolves.toEqual([]);
+    expect(prisma.connection.findFirst).not.toHaveBeenCalled();
   });
 });

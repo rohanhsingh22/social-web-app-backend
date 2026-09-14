@@ -13,6 +13,7 @@ import {
   UserStatus,
 } from "@prisma/client";
 import { RateLimitService } from "@app/common/rate-limit.service";
+import { normalizePublicUserId } from "@app/common/public-user-id";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 
 const CONNECTION_REQUEST_DAILY_LIMIT = 30;
@@ -91,9 +92,11 @@ export class ConnectionsService {
     return requests.map((connection) => this.mapConnection(connection, userId));
   }
 
-  async createRequest(requesterId: string, receiverId: string) {
-    if (requesterId === receiverId) {
-      throw new BadRequestException("CANNOT_CONNECT_TO_SELF");
+  async createRequest(requesterId: string, receiverPublicUserId: string) {
+    const publicUserId = normalizePublicUserId(receiverPublicUserId);
+
+    if (!publicUserId) {
+      throw new NotFoundException("USER_NOT_FOUND");
     }
 
     await this.rateLimit.assertAllowed(
@@ -108,7 +111,7 @@ export class ConnectionsService {
         select: { id: true, status: true },
       }),
       this.prisma.user.findUnique({
-        where: { id: receiverId },
+        where: { publicUserId },
         select: { id: true, status: true },
       }),
     ]);
@@ -121,9 +124,15 @@ export class ConnectionsService {
       throw new NotFoundException("USER_NOT_FOUND");
     }
 
+    if (requester.id === receiver.id) {
+      throw new BadRequestException("CANNOT_CONNECT_TO_SELF");
+    }
+
     if (receiver.status === UserStatus.banned) {
       throw new ForbiddenException("USER_NOT_AVAILABLE");
     }
+
+    const receiverId = receiver.id;
 
     await this.assertNotBlocked(requesterId, receiverId);
 

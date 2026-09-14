@@ -744,9 +744,11 @@ Accepted connection rules:
 
 ### User Search
 
-- `GET /users/search?q=...`
+- `GET /users/search?q=HT-XXXXXXXX`
 
 Requires login.
+
+Exact HiRotoli public ID lookup only (case-insensitive). Does not search username or display name. Returns 0 or 1 user. Every user has a unique immutable `publicUserId` (`HT-` + 8 unambiguous characters). Connection request and block create accept the target's public ID.
 
 ### Direct Messages
 

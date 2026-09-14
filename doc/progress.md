@@ -55,7 +55,10 @@ These routes exist but return placeholder/empty data and are not yet implemented
 ### Connections and user search (Phase 6)
 - Authenticated connection request APIs are implemented with duplicate and reversed-pair prevention.
 - Accepting a connection creates or reuses a direct conversation for the pair.
-- User search returns safe public profile fields, excludes blocked relationships, and includes viewer-relative connection status.
+- Every user has an immutable unique HiRotoli public ID (`publicUserId`, format `HT-XXXXXXXX`) assigned at signup and backfilled for existing users.
+- `GET /users/search?q=HT-...` is an **exact public ID lookup** only (case-insensitive). It does not search username or display name. Returns 0 or 1 safe public profile plus viewer-relative connection status; excludes self, inactive, and blocked relationships.
+- Connection requests and block create accept the target's **public** HiRotoli ID (not internal UUID).
+- Own profile (`GET /profiles/me`) and `GET /auth/me` expose `publicUserId` for copy/share.
 - Redis rate limits are enforced for connection requests and user search.
 
 ### Direct messages (Phase 7)

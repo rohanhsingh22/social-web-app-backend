@@ -18,6 +18,13 @@ export class ProfilesService {
   async getOwnProfile(userId: string) {
     const profile = await this.prisma.profile.findUnique({
       where: { userId },
+      include: {
+        user: {
+          select: {
+            publicUserId: true,
+          },
+        },
+      },
     });
 
     if (!profile) {
@@ -25,7 +32,12 @@ export class ProfilesService {
       throw new NotFoundException('PROFILE_NOT_FOUND');
     }
 
-    return profile;
+    const { user, ...profileFields } = profile;
+
+    return {
+      ...profileFields,
+      publicUserId: user.publicUserId,
+    };
   }
 
   async updateOwnProfile(userId: string, dto: UpdateProfileDto) {
@@ -74,7 +86,10 @@ export class ProfilesService {
       });
 
       this.logger.log(`Profile updated for user ${userId}`);
-      return updated;
+      return {
+        ...updated,
+        publicUserId: existing.publicUserId,
+      };
     } catch (error) {
       this.logger.error(
         `Failed to update profile for user ${userId}`,
@@ -84,33 +99,110 @@ export class ProfilesService {
     }
   }
 
-  async getPublicProfile(username: string) {
-    const profile = await this.prisma.profile.findUnique({
-      where: { username },
+  async getUserProfile(publicUserId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: {
+        publicUserId,
+      },
       select: {
-        userId: true,
-        username: true,
-        displayName: true,
-        avatarUrl: true,
-        bio: true,
-        ageGroup: true,
-        gender: true,
-        characterConfig: true,
-        region: true,
-        city: true,
-        primaryLanguage: true,
-        languages: true,
-        isComplete: true,
-        createdAt: true,
+        publicUserId: true,
+        status: true,
+
+        profile: {
+          select: {
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            bio: true,
+            dob: true,
+            ageGroup: true,
+            gender: true,
+            characterConfig: true,
+            region: true,
+            city: true,
+            primaryLanguage: true,
+            languages: true,
+            isComplete: true,
+            createdAt: true,
+          },
+        },
+
+        settings: {
+          select: {
+            profileVisibility: true,
+          },
+        },
       },
     });
 
-    if (!profile) {
-      this.logger.warn(`Public profile not found for username ${username}`);
+    if (!user?.profile) {
+      this.logger.warn(
+        `Public profile not found for publicUserId ${publicUserId}`,
+      );
+
       throw new NotFoundException('PROFILE_NOT_FOUND');
     }
 
-    return profile;
+    // Do not expose profiles of deleted/banned users.
+    if (user.status === 'deleted' || user.status === 'banned') {
+      throw new NotFoundException('PROFILE_NOT_FOUND');
+    }
+
+    const visibility = this.getProfileVisibility(
+      user.settings?.profileVisibility,
+    );
+
+    const profile = user.profile;
+
+    return {
+      publicUserId: user.publicUserId,
+
+      username: profile.username,
+      displayName: profile.displayName,
+
+      avatarUrl: visibility.avatar
+        ? profile.avatarUrl
+        : null,
+
+      bio: visibility.bio
+        ? profile.bio
+        : null,
+
+      dob: visibility.dob
+        ? profile.dob
+        : null,
+
+      ageGroup: visibility.age
+        ? profile.ageGroup
+        : null,
+
+      gender: visibility.gender
+        ? profile.gender
+        : null,
+
+      characterConfig: visibility.avatar
+        ? profile.characterConfig
+        : null,
+
+      region: visibility.region
+        ? profile.region
+        : null,
+
+      city: visibility.city
+        ? profile.city
+        : null,
+
+      primaryLanguage: visibility.primaryLanguage
+        ? profile.primaryLanguage
+        : null,
+
+      languages: visibility.languages
+        ? profile.languages
+        : [],
+
+      isComplete: profile.isComplete,
+      createdAt: profile.createdAt,
+    };
   }
 
   private async assertUsernameAvailable(userId: string, username: string) {
@@ -181,5 +273,25 @@ export class ProfilesService {
         profile.region &&
         profile.primaryLanguage,
     );
+  }
+
+  private getProfileVisibility(value: unknown) {
+    const visibility =
+      value && typeof value === 'object'
+        ? (value as Record<string, unknown>)
+        : {};
+
+    return {
+      avatar: visibility.avatar !== false,
+      bio: visibility.bio !== false,
+      dob: visibility.dob !== false,
+      age: visibility.age !== false,
+      gender: visibility.gender !== false,
+      region: visibility.region !== false,
+      city: visibility.city !== false,
+      primaryLanguage:
+        visibility.primaryLanguage !== false,
+      languages: visibility.languages !== false,
+    };
   }
 }

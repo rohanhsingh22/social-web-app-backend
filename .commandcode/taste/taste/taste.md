@@ -18,3 +18,10 @@
 - Wants inspection before modification — before changing code, the assistant should read and verify the current implementation matches expectations; if it differs, stop and explain the discrepancy rather than making an unrelated change. Confidence: 0.8
 - Wants detailed change reports — after making changes, expects a summary of exactly which files were changed and why, plus the validation commands run and their results. Confidence: 0.8
 - Prefers to avoid unnecessary abstractions when optimizing — explicitly rejects adding transactions, caching layers, or other infrastructure for a simple optimization; wants the simplest possible solution that achieves the goal. Confidence: 0.75
+- Drives backend work from a phase/spec document (`doc/project-context.md`, `doc/backend-chat-app.txt`) and expects the assistant to check the doc to determine which phases are complete, then complete the remaining phases per the doc rather than deciding scope on its own. Confidence: 0.8
+- Prefers lean/minimal seed data and configurations — only keeps content that's needed for the current phase ("for now"), and proactively removes speculative or unused entries (e.g., extra chatroom channels) to maintain focus rather than accumulating options. Confidence: 0.8
+- Works on Windows: expects Windows drive paths (e.g., `E:\backend`); shell commands observed use cmd.exe syntax (e.g., `del`) and `npx`/`npm` directly rather than `npx.cmd`/`npm.cmd`. Confidence: 0.75
+- Prefers `upsert` over `create` for database writes to ensure idempotency — operations can be safely re-run without producing duplicate records. Confidence: 0.75
+- Uses a dedicated `scratchpad/` directory for throwaway scripts — writes temporary TypeScript scripts there, executes them via `npx ts-node`, and deletes them afterward with `del`. Confidence: 0.8
+- Always disconnects Prisma Client in a `.finally()` block — consistently uses `await prisma.$disconnect()` inside `.finally(async () => { ... })` to ensure DB connections are properly closed even on errors. Confidence: 0.8
+- Uses TypeScript `as const` assertions on array literals of constant data to preserve literal types. Confidence: 0.65
