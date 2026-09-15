@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { envelope } from '@app/common/api-response';
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
@@ -22,6 +23,7 @@ export class AuthController {
   ) {}
 
   @Post('refresh')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async refresh(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
     const result = await this.authService.refresh(
       request.cookies?.refresh_token,
@@ -59,17 +61,14 @@ export class AuthController {
 
   private setAuthCookies(
     response: Response,
-    accessToken: string,
+    _accessToken: string,
     refreshToken: string,
   ) {
     const secure = this.config.get<string>('app.nodeEnv') === 'production';
 
-    response.cookie('access_token', accessToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure,
-      maxAge: 15 * 60 * 1000,
-    });
+    // Single-transport model: access token lives in frontend memory and is
+    // sent via Authorization header; only the refresh token uses an HttpOnly
+    // cookie. _accessToken is returned in the response body instead.
     response.cookie('refresh_token', refreshToken, {
       httpOnly: true,
       sameSite: 'lax',

@@ -6,9 +6,9 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
-    "start:dev": "nest start api --watch",
-    "start:dev:realtime": "nest start realtime --watch",
-    "start:dev:worker": "nest start worker --watch",
+    "start:dev": "nest start api --watch --path tsconfig.api.json",
+    "start:dev:realtime": "nest start realtime --watch --path tsconfig.realtime.json",
+    "start:dev:worker": "nest start worker --watch --path tsconfig.worker.json",
     "start:api": "nest start api",
     "start:realtime": "nest start realtime",
     "start:worker": "nest start worker",

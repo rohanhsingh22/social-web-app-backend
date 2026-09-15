@@ -9,7 +9,15 @@ const parseOrigins = (value?: string): string[] => {
     .filter(Boolean);
 };
 
-export const appConfig = () => ({
+export const appConfig = () => {
+  if (
+    (process.env.NODE_ENV ?? 'development') === 'production' &&
+    !process.env.JWT_ACCESS_SECRET
+  ) {
+    throw new Error('JWT_ACCESS_SECRET is required in production');
+  }
+
+  return {
   app: {
     nodeEnv: process.env.NODE_ENV ?? 'development',
     port: Number(process.env.PORT ?? 3000),
@@ -22,7 +30,8 @@ export const appConfig = () => ({
   },
   auth: {
     jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
-    jwtRefreshSecret: process.env.JWT_REFRESH_SECRET,
+    jwtIssuer: process.env.JWT_ISSUER ?? 'hirotoli-api',
+    jwtAudience: process.env.JWT_AUDIENCE ?? 'hirotoli-client',
     accessTokenTtl: process.env.ACCESS_TOKEN_TTL ?? '15m',
     refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '30d',
     facebookAppId: process.env.FACEBOOK_APP_ID,
@@ -50,4 +59,5 @@ export const appConfig = () => ({
   logging: {
     level: process.env.LOG_LEVEL ?? 'log',
   },
-});
+  };
+};

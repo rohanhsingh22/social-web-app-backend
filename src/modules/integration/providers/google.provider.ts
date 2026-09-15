@@ -22,7 +22,7 @@ export class GoogleProvider implements OAuthProvider {
 
   constructor(private readonly config: ConfigService) {}
 
-  async getLoginUrl(): Promise<string> {
+  async getLoginUrl(state: string): Promise<string> {
     const clientId = this.config.get<string>('auth.googleClientId');
     const callbackUrl = this.config.get<string>('auth.googleCallbackUrl');
 
@@ -38,6 +38,7 @@ export class GoogleProvider implements OAuthProvider {
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('access_type', 'offline');
     url.searchParams.set('prompt', 'consent');
+    url.searchParams.set('state', state);
 
     return url.toString();
   }

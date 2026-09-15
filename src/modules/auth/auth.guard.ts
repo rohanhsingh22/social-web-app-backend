@@ -49,6 +49,8 @@ export class AuthGuard implements CanActivate {
       return authHeader.slice('Bearer '.length);
     }
 
+    // Transitional fallback: access_token cookie is no longer issued, but
+    // sessions created before Phase 1.4b still carry one until expiry.
     return request.cookies?.access_token;
   }
 }

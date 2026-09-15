@@ -14,7 +14,7 @@ export interface OAuthProvider {
   readonly id: string;
   readonly displayName: string;
 
-  getLoginUrl(): Promise<string>;
+  getLoginUrl(state: string): Promise<string>;
   exchangeCode(code: string): Promise<string>;
   fetchProfile(accessToken: string): Promise<NormalizedProfile>;
 }

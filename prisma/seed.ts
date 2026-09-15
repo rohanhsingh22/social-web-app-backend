@@ -36,6 +36,85 @@ async function main() {
       },
     });
   }
+
+  // Launch 1 Tolies: fixed reference data, never user-created.
+  const tolis = [
+    {
+      name: 'Vector',
+      description: 'For people who move with purpose and direction.',
+      motto: 'Move with purpose.',
+    },
+    {
+      name: 'Wave',
+      description: 'For people who go with the flow and lift others up.',
+      motto: 'Ride together.',
+    },
+    {
+      name: 'Quantum',
+      description: 'For curious minds who love big ideas and deep talks.',
+      motto: 'Stay curious.',
+    },
+    {
+      name: 'Orbit',
+      description: 'For loyal souls who keep their circle close.',
+      motto: 'Hold your circle.',
+    },
+    {
+      name: 'Flux',
+      description: 'For free spirits who embrace change and new energy.',
+      motto: 'Embrace change.',
+    },
+  ];
+
+  const toliIds = new Map<string, string>();
+
+  for (const toli of tolis) {
+    const record = await prisma.toli.upsert({
+      where: { name: toli.name },
+      update: {
+        description: toli.description,
+        motto: toli.motto,
+      },
+      create: toli,
+    });
+    toliIds.set(record.name, record.id);
+  }
+
+  // Toli rooms: private, one per Toli, membership-enforced. Never listed
+  // publicly and never served through the public channel endpoints.
+  let toliSortOrder = 140;
+  for (const toli of tolis) {
+    const toliId = toliIds.get(toli.name);
+
+    if (!toliId) {
+      throw new Error(`Missing Toli id for ${toli.name} during seed`);
+    }
+
+    const slug = `toli-${toli.name.toLowerCase()}`;
+    await prisma.channel.upsert({
+      where: { slug },
+      update: {
+        name: `${toli.name} Chat`,
+        type: 'toli',
+        visibility: 'private',
+        isDefault: false,
+        isActive: true,
+        sortOrder: toliSortOrder,
+        toliId,
+      },
+      create: {
+        name: `${toli.name} Chat`,
+        slug,
+        type: 'toli',
+        visibility: 'private',
+        isDefault: false,
+        isActive: true,
+        sortOrder: toliSortOrder,
+        toliId,
+      },
+    });
+    toliSortOrder += 10;
+  }
 }
 
 main()

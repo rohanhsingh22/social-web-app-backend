@@ -37,6 +37,7 @@ async function bootstrap() {
   );
   app.useGlobalFilters(new AllExceptionsFilter());
 
+  app.enableShutdownHooks();
   await app.init();
 
   try {

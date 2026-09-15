@@ -11,7 +11,12 @@
     "sourceMap": true,
     "outDir": "./dist",
     "baseUrl": "./",
-    "incremental": true,
+    // NOTE: incremental must stay off. The documented dev flow runs three
+    // concurrent `nest start --watch` processes (api/realtime/worker) against
+    // this single outDir; a shared tsbuildinfo lets one watcher trust another
+    // watcher's half-written emit and boot node with "0 errors" but missing
+    // modules at runtime. Watch mode is still incremental in memory, so this
+    // only costs cold-start speed.
     "skipLibCheck": true,
     "strict": true,
     "strictPropertyInitialization": false,

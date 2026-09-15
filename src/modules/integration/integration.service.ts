@@ -94,6 +94,11 @@ export class IntegrationService {
           });
 
           if (existingIdentity) {
+            const previousProviderAvatarUrl =
+              existingIdentity.providerAvatarUrl;
+            const currentProfileAvatarUrl =
+              existingIdentity.user.profile?.avatarUrl ?? null;
+
             await tx.authIdentity.update({
               where: { id: existingIdentity.id },
               data: {
@@ -103,20 +108,39 @@ export class IntegrationService {
               },
             });
 
+            // HiRotoli-owned fields (displayName, bio, Toli, interests,
+            // profile-picture choice, 3D character) must never be overwritten
+            // by provider data. Only keep tracking the provider avatar while
+            // the profile is still using it; a custom/Toli avatar is left alone
+            // (full profilePictureType split lands in Phase 2).
+            const tracksProviderAvatar =
+              !currentProfileAvatarUrl ||
+              (previousProviderAvatarUrl !== null &&
+                currentProfileAvatarUrl === previousProviderAvatarUrl);
+
             return tx.user.update({
               where: { id: existingIdentity.userId },
               data: {
                 lastLoginAt: new Date(),
-                profile: {
-                  update: {
-                    displayName: profile.displayName,
-                    avatarUrl: profile.avatarUrl,
-                  },
-                },
+                ...(tracksProviderAvatar &&
+                profile.avatarUrl !== currentProfileAvatarUrl
+                  ? {
+                      profile: {
+                        update: {
+                          avatarUrl: profile.avatarUrl,
+                        },
+                      },
+                    }
+                  : {}),
               },
               include: { profile: true },
             });
           }
+
+          const displayName = await this.createUniqueDisplayName(
+            tx,
+            profile.displayName,
+          );
 
           return tx.user.create({
             data: {
@@ -133,11 +157,9 @@ export class IntegrationService {
               },
               profile: {
                 create: {
-                  username: await this.createUniqueUsername(
-                    tx,
-                    profile.displayName,
-                  ),
-                  displayName: profile.displayName,
+                  username: await this.createUniqueUsername(tx, displayName),
+                  displayName,
+                  displayNameNormalized: displayName.toLowerCase(),
                   avatarUrl: profile.avatarUrl,
                   languages: [],
                   isComplete: false,
@@ -149,11 +171,12 @@ export class IntegrationService {
         });
       } catch (error) {
         if (
-          this.isPublicUserIdUniqueConflict(error) &&
+          (this.isPublicUserIdUniqueConflict(error) ||
+            this.isDisplayNameUniqueConflict(error)) &&
           attempt < PUBLIC_USER_ID_CREATE_ATTEMPTS - 1
         ) {
           this.logger.warn(
-            `publicUserId collision on OAuth signup; retrying (attempt ${attempt + 1})`,
+            `Unique conflict on OAuth signup; retrying (attempt ${attempt + 1})`,
           );
           continue;
         }
@@ -188,6 +211,57 @@ export class IntegrationService {
     }
 
     return false;
+  }
+
+  private isDisplayNameUniqueConflict(error: unknown): boolean {
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+      error.code !== 'P2002'
+    ) {
+      return false;
+    }
+
+    const target = error.meta?.target;
+    const values =
+      typeof target === 'string'
+        ? [target]
+        : Array.isArray(target)
+          ? target
+          : [];
+
+    return values.some(
+      (value) => typeof value === 'string' && value.includes('display_name'),
+    );
+  }
+
+  private async createUniqueDisplayName(
+    tx: Prisma.TransactionClient,
+    displayName: string,
+  ): Promise<string> {
+    const base = displayName.trim().slice(0, 60) || 'HiRotoli User';
+
+    const existing = await tx.profile.findUnique({
+      where: { displayNameNormalized: base.toLowerCase() },
+      select: { userId: true },
+    });
+
+    if (!existing) {
+      return base;
+    }
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = `${base.slice(0, 50)}_${randomBytes(3).toString('hex')}`;
+      const clash = await tx.profile.findUnique({
+        where: { displayNameNormalized: candidate.toLowerCase() },
+        select: { userId: true },
+      });
+
+      if (!clash) {
+        return candidate;
+      }
+    }
+
+    return `${base.slice(0, 40)}_${randomBytes(8).toString('hex')}`;
   }
 
   private async createUniqueUsername(

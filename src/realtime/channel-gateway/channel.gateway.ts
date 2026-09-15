@@ -139,18 +139,27 @@ export class ChannelGateway
       return { ok: false, code: 'CHANNEL_REQUIRED' };
     }
 
-    const channel = await this.channels
-      .getBySlugOrId(body.channelId)
-      .catch((error) => {
-        this.logger.error(
-          `Failed to resolve channel ${body.channelId} on join`,
-          error instanceof Error ? error.stack : undefined,
-        );
-        return null;
-      });
+    const channel = await this.resolveChannel(body.channelId);
 
     if (!channel) {
       return { ok: false, code: 'CHANNEL_NOT_FOUND' };
+    }
+
+    if (channel.toliId) {
+      const user = socket.data.user;
+
+      if (!user) {
+        return { ok: false, code: 'AUTH_REQUIRED' };
+      }
+
+      const allowed = await this.channels.hasToliChannelAccess(
+        user.id,
+        channel,
+      );
+
+      if (!allowed) {
+        return { ok: false, code: 'TOLI_FORBIDDEN' };
+      }
     }
 
     await socket.join(`channel:${channel.id}`);
@@ -176,15 +185,7 @@ export class ChannelGateway
       return { ok: true };
     }
 
-    const channel = await this.channels
-      .getBySlugOrId(body.channelId)
-      .catch((error) => {
-        this.logger.error(
-          `Failed to resolve channel ${body.channelId} on leave`,
-          error instanceof Error ? error.stack : undefined,
-        );
-        return null;
-      });
+    const channel = await this.resolveChannel(body.channelId);
 
     if (!channel) {
       return { ok: true };
@@ -239,18 +240,27 @@ export class ChannelGateway
       return { ok: false, code: 'MESSAGE_TOO_LONG' };
     }
 
-    const channel = await this.channels
-      .getBySlugOrId(body.channelId ?? '')
-      .catch((error) => {
-        this.logger.error(
-          `Failed to resolve channel ${body.channelId} on message send`,
-          error instanceof Error ? error.stack : undefined,
-        );
-        return null;
-      });
+    const channel = await this.resolveChannel(body.channelId ?? '');
 
     if (!channel) {
       return { ok: false, code: 'CHANNEL_NOT_FOUND' };
+    }
+
+    // Membership is re-checked on every send so a Toli change takes effect
+    // immediately, even on long-lived sockets. Stale-room reads after a
+    // change are additionally cut off by the client leaving on Toli change
+    // (a Redis-backed kick is the Phase 10 hardening follow-up).
+    const allowed = await this.channels.hasToliChannelAccess(
+      user.id,
+      channel,
+    );
+
+    if (!allowed) {
+      socket.emit('channel:error', {
+        code: 'TOLI_FORBIDDEN',
+        message: 'This chat room belongs to another Toli.',
+      });
+      return { ok: false, code: 'TOLI_FORBIDDEN' };
     }
 
     const rateLimitResult = await this.rateLimit.checkChannelMessage(
@@ -267,7 +277,7 @@ export class ChannelGateway
       return { ok: false, code: 'RATE_LIMITED' };
     }
 
-    const message = await this.channels.createMessage(
+    const message = await this.channels.persistChannelMessage(
       channel.id,
       user.id,
       bodyText,
@@ -276,6 +286,28 @@ export class ChannelGateway
     this.server.to(`channel:${channel.id}`).emit('channel:message:new', message);
 
     return { ok: true, message };
+  }
+
+  private async resolveChannel(channelId: string) {
+    const pub = await this.channels.getBySlugOrId(channelId).catch((error) => {
+      this.logger.error(
+        `Failed to resolve channel ${channelId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return null;
+    });
+
+    if (pub) {
+      return pub;
+    }
+
+    return this.channels.getToliChannelById(channelId).catch((error) => {
+      this.logger.error(
+        `Failed to resolve Toli channel ${channelId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return null;
+    });
   }
 
   private async refreshPresence(): Promise<void> {

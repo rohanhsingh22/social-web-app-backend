@@ -5,6 +5,7 @@ import { appConfig } from '@app/config/app.config';
 import { CoreModule } from '@app/core/core.module';
 import { ModerationWorkerModule } from '@app/workers/moderation-worker/moderation-worker.module';
 import { NotificationWorkerModule } from '@app/workers/notification-worker/notification-worker.module';
+import { ThoughtEventsWorkerModule } from '@app/workers/thought-events-worker/thought-events-worker.module';
 import { CleanupWorkerModule } from '@app/workers/cleanup-worker/cleanup-worker.module';
 import { ImageWorkerModule } from '@app/workers/image-worker/image-worker.module';
 
@@ -26,6 +27,7 @@ import { ImageWorkerModule } from '@app/workers/image-worker/image-worker.module
     CoreModule,
     ModerationWorkerModule,
     NotificationWorkerModule,
+    ThoughtEventsWorkerModule,
     CleanupWorkerModule,
     ImageWorkerModule,
   ],

@@ -14,6 +14,7 @@ describe('AuthService', () => {
     const transaction = jest.fn();
     const sessionFindUnique = jest.fn();
     const sessionUpdate = jest.fn();
+    const sessionUpdateMany = jest.fn();
     const userFindUnique = jest.fn();
 
     const config = {
@@ -23,7 +24,11 @@ describe('AuthService', () => {
     const jwt = { signAsync, verifyAsync } as unknown as JwtService;
     const prisma = {
       $transaction: transaction,
-      session: { findUnique: sessionFindUnique, update: sessionUpdate },
+      session: {
+        findUnique: sessionFindUnique,
+        update: sessionUpdate,
+        updateMany: sessionUpdateMany,
+      },
       user: { findUnique: userFindUnique },
     } as unknown as PrismaService;
     const sessionService = {
@@ -44,21 +49,46 @@ describe('AuthService', () => {
       transaction,
       sessionFindUnique,
       sessionUpdate,
+      sessionUpdateMany,
       userFindUnique,
       sessionService,
     };
   };
 
+  const VALID_SESSION_ID = '123e4567-e89b-12d3-a456-426614174000';
+  const VALID_SECRET = `${'A'.repeat(64)}`;
+  const VALID_REFRESH_TOKEN = `${VALID_SESSION_ID}.${VALID_SECRET}`;
+
   it('revokes a session on logout', async () => {
     const { service, sessionUpdate } = createService();
     sessionUpdate.mockResolvedValue({});
 
-    await service.logout('session-id.token');
+    await service.logout(VALID_REFRESH_TOKEN);
 
     expect(sessionUpdate).toHaveBeenCalledWith({
-      where: { id: 'session-id' },
+      where: { id: VALID_SESSION_ID },
       data: { revokedAt: expect.any(Date) },
     });
+  });
+
+  it('ignores malformed refresh tokens on logout', async () => {
+    const { service, sessionUpdate } = createService();
+
+    await service.logout('not-a-valid-token');
+
+    expect(sessionUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed refresh tokens before hitting the database', async () => {
+    const { service, sessionFindUnique } = createService();
+
+    await expect(service.refresh('garbage', { })).rejects.toThrow(
+      UnauthorizedException,
+    );
+    await expect(
+      service.refresh('short.secret', { }),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(sessionFindUnique).not.toHaveBeenCalled();
   });
 
   it('returns the current user with profile', async () => {

@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Channel, MessageStatus } from '@prisma/client';
+import { Channel, ChannelType, MessageStatus } from '@prisma/client';
+import { profileCardSelect, toProfileCard } from '@app/common/profile-card';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { RedisService } from '@app/core/redis/redis.service';
 import { ModerationService } from '@app/modules/moderation/moderation.service';
@@ -31,10 +33,14 @@ type ChannelMessageWithSender = {
   deletedBy: string | null;
   sender: {
     id: string;
+    publicUserId?: string;
     profile: {
       username: string;
       displayName: string;
       avatarUrl: string | null;
+      profilePictureType: 'provider' | 'toli';
+      toliAvatarKey: string | null;
+      toli: { id: string; name: string } | null;
     } | null;
   };
 };
@@ -42,11 +48,18 @@ type ChannelMessageWithSender = {
 type PublicChannelMessage = Omit<ChannelMessageWithSender, 'sender'> & {
   sender: {
     id: string;
+    publicUserId?: string;
     profile: {
       username: string;
       displayName: string;
       avatarUrl: string | null;
       profileUrl: string;
+      profilePicture: {
+        type: string;
+        avatarUrl: string | null;
+        toliAvatarKey: string | null;
+      };
+      toli: { id: string; name: string } | null;
     } | null;
   };
 };
@@ -104,6 +117,7 @@ export class ChannelsService {
       where: {
         isActive: true,
         visibility: 'public',
+        type: { not: ChannelType.toli },
       },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
@@ -128,6 +142,7 @@ export class ChannelsService {
         isActive: true,
         visibility: 'public',
         isDefault: true,
+        type: { not: ChannelType.toli },
       },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
@@ -142,6 +157,7 @@ export class ChannelsService {
       where: {
         isActive: true,
         visibility: 'public',
+        type: { not: ChannelType.toli },
       },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
@@ -166,6 +182,7 @@ export class ChannelsService {
         slug,
         isActive: true,
         visibility: 'public',
+        type: { not: ChannelType.toli },
       },
     });
 
@@ -192,6 +209,7 @@ export class ChannelsService {
       where: {
         isActive: true,
         visibility: 'public',
+        type: { not: ChannelType.toli },
         ...(this.isUuid(slugOrId) ? { id: slugOrId } : { slug: slugOrId }),
       },
     });
@@ -209,6 +227,66 @@ export class ChannelsService {
     this.publicChannelsCache = undefined;
     this.defaultChannelCache = undefined;
     this.channelCache.clear();
+  }
+
+  // Toli rooms are never served through the public paths above. They resolve
+  // here, deliberately uncached: membership is per-user and must be checked
+  // on every join/send so a Toli change takes effect immediately.
+  async getToliChannelByToliId(toliId: string) {
+    return this.prisma.channel.findFirst({
+      where: { toliId, isActive: true },
+      include: { toli: { select: { id: true, name: true } } },
+    });
+  }
+
+  async getToliChannelById(id: string) {
+    if (!this.isUuid(id)) {
+      return null;
+    }
+
+    return this.prisma.channel.findFirst({
+      where: { id, isActive: true, toliId: { not: null } },
+    });
+  }
+
+  async getMyToliChannel(userId: string) {
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { toliId: true },
+    });
+
+    if (!profile?.toliId) {
+      throw new ForbiddenException('TOLI_REQUIRED');
+    }
+
+    const channel = await this.getToliChannelByToliId(profile.toliId);
+
+    if (!channel) {
+      this.logger.error(`Toli channel missing for Toli ${profile.toliId}`);
+      throw new NotFoundException('TOLI_CHANNEL_NOT_FOUND');
+    }
+
+    return channel;
+  }
+
+  async hasToliChannelAccess(
+    userId: string | undefined,
+    channel: { toliId: string | null },
+  ): Promise<boolean> {
+    if (!channel.toliId) {
+      return true;
+    }
+
+    if (!userId) {
+      return false;
+    }
+
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { toliId: true },
+    });
+
+    return profile?.toliId === channel.toliId;
   }
 
   async warmDefaultMessageCache() {
@@ -235,6 +313,7 @@ export class ChannelsService {
         id: channelId,
         isActive: true,
         visibility: 'public',
+        type: { not: ChannelType.toli },
       },
     });
 
@@ -243,6 +322,16 @@ export class ChannelsService {
       throw new NotFoundException('CHANNEL_NOT_FOUND');
     }
 
+    return this.persistChannelMessage(channel.id, senderId, body);
+  }
+
+  // Gateway path for already-resolved channels (public or membership-checked
+  // Toli rooms). Moderation, mapping, and cache invalidation are shared.
+  async persistChannelMessage(
+    channelId: string,
+    senderId: string,
+    body: string,
+  ) {
     await this.moderation.assertMessageAllowed(body);
 
     try {
@@ -256,11 +345,10 @@ export class ChannelsService {
           sender: {
             select: {
               id: true,
+              publicUserId: true,
               profile: {
                 select: {
-                  username: true,
-                  displayName: true,
-                  avatarUrl: true,
+                  ...profileCardSelect,
                 },
               },
             },
@@ -286,6 +374,23 @@ export class ChannelsService {
     limitValue?: string,
   ): Promise<MessagePageResult> {
     const channel = await this.getBySlug(slug);
+    return this.getMessagesForChannel(channel, cursor, limitValue);
+  }
+
+  async getToliMessages(
+    userId: string,
+    cursor?: string,
+    limitValue?: string,
+  ): Promise<MessagePageResult> {
+    const channel = await this.getMyToliChannel(userId);
+    return this.getMessagesForChannel(channel, cursor, limitValue);
+  }
+
+  private async getMessagesForChannel(
+    channel: Channel,
+    cursor?: string,
+    limitValue?: string,
+  ): Promise<MessagePageResult> {
     const limit = this.parseLimit(limitValue);
 
     if (!cursor) {
@@ -316,9 +421,7 @@ export class ChannelsService {
             publicUserId: true,
             profile: {
               select: {
-                username: true,
-                displayName: true,
-                avatarUrl: true,
+                ...profileCardSelect,
               },
             },
           },
@@ -407,13 +510,14 @@ export class ChannelsService {
     message: ChannelMessageWithSender,
   ): PublicChannelMessage {
     const frontendBaseUrl = this.config.get<string>('app.frontendBaseUrl') ?? '';
+    const card = toProfileCard(message.sender.profile);
     return {
       ...message,
       sender: {
         ...message.sender,
         profile: message.sender.profile
           ? {
-              ...message.sender.profile,
+              ...card,
               profileUrl: `${frontendBaseUrl}/profiles/${message.sender.profile.username}`,
             }
           : null,

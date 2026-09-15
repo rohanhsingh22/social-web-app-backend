@@ -58,6 +58,9 @@ export class SessionService {
       } satisfies AccessTokenPayload,
       {
         secret: this.config.getOrThrow<string>('auth.jwtAccessSecret'),
+        issuer: this.config.get<string>('auth.jwtIssuer') ?? 'hirotoli-api',
+        audience:
+          this.config.get<string>('auth.jwtAudience') ?? 'hirotoli-client',
         expiresIn:
           this.config.getOrThrow<StringValue>('auth.accessTokenTtl'),
       },

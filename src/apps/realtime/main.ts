@@ -18,6 +18,7 @@ async function bootstrap() {
   await redisIoAdapter.connectToRedis(config.getOrThrow<string>('redis.url'));
   app.useWebSocketAdapter(redisIoAdapter);
 
+  app.enableShutdownHooks();
   const port = config.getOrThrow<number>('app.realtimePort');
   await app.listen(port);
   logger.log(`Realtime app listening on port ${port}`);

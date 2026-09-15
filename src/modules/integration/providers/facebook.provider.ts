@@ -23,7 +23,7 @@ export class FacebookProvider implements OAuthProvider {
 
   constructor(private readonly config: ConfigService) {}
 
-  async getLoginUrl(): Promise<string> {
+  async getLoginUrl(state: string): Promise<string> {
     const appId = this.config.get<string>('auth.facebookAppId');
     const callbackUrl = this.config.get<string>('auth.facebookCallbackUrl');
 
@@ -37,6 +37,7 @@ export class FacebookProvider implements OAuthProvider {
     url.searchParams.set('redirect_uri', callbackUrl);
     url.searchParams.set('scope', 'public_profile,email');
     url.searchParams.set('response_type', 'code');
+    url.searchParams.set('state', state);
 
     return url.toString();
   }

@@ -6,6 +6,8 @@ import {
 import { ConnectionStatus, UserStatus } from "@prisma/client";
 import { RateLimitService } from "@app/common/rate-limit.service";
 import { PrismaService } from "@app/core/prisma/prisma.service";
+import { NotificationsService } from "@app/modules/notifications/notifications.service";
+import { ThoughtsService } from "@app/modules/thoughts/thoughts.service";
 import { ConnectionsService } from "./connections.service";
 
 describe("ConnectionsService", () => {
@@ -39,6 +41,9 @@ describe("ConnectionsService", () => {
         create: jest.fn(),
         update: jest.fn(),
       },
+      profile: {
+        findUnique: jest.fn().mockResolvedValue({ displayName: "Test User" }),
+      },
       $transaction: jest.fn((callback: (transaction: typeof tx) => unknown) =>
         callback(tx),
       ),
@@ -46,11 +51,20 @@ describe("ConnectionsService", () => {
     const rateLimit = {
       assertAllowed: jest.fn().mockResolvedValue(undefined),
     } as unknown as RateLimitService;
+    const notifications = {
+      connectionRequest: jest.fn().mockResolvedValue({ id: "notification-1" }),
+      connectionAccepted: jest.fn().mockResolvedValue({ id: "notification-2" }),
+    } as unknown as NotificationsService;
+    const thoughts = {
+      recordEvent: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ThoughtsService;
 
     return {
-      service: new ConnectionsService(prisma, rateLimit),
+      service: new ConnectionsService(prisma, rateLimit, notifications, thoughts),
       prisma,
       rateLimit,
+      notifications,
+      thoughts,
       tx,
     };
   };
@@ -97,7 +111,7 @@ describe("ConnectionsService", () => {
   };
 
   it("creates a pending request with a normalized user pair", async () => {
-    const { service, prisma, rateLimit } = createService();
+    const { service, prisma, rateLimit, notifications, thoughts } = createService();
     jest
       .mocked(prisma.user.findUnique)
       .mockResolvedValueOnce({
@@ -143,6 +157,19 @@ describe("ConnectionsService", () => {
           userHighId: "user-b",
         }),
       }),
+    );
+    expect(notifications.connectionRequest).toHaveBeenCalledWith(
+      "user-a",
+      expect.objectContaining({
+        requesterId: "user-b",
+        connectionId: "connection-id",
+      }),
+    );
+    expect(thoughts.recordEvent).toHaveBeenCalledWith(
+      "user-b",
+      "connection_request",
+      undefined,
+      { targetUserId: "user-a" },
     );
   });
 
@@ -205,7 +232,7 @@ describe("ConnectionsService", () => {
   });
 
   it("accepts a pending request and creates a direct conversation", async () => {
-    const { service, tx } = createService();
+    const { service, tx, notifications } = createService();
     tx.connection.findUnique.mockResolvedValue(connection);
     tx.block.findFirst.mockResolvedValue(null);
     tx.user.findMany.mockResolvedValue([
@@ -239,6 +266,13 @@ describe("ConnectionsService", () => {
             create: [{ userId: "user-a" }, { userId: "user-b" }],
           },
         },
+      }),
+    );
+    expect(notifications.connectionAccepted).toHaveBeenCalledWith(
+      "user-a",
+      expect.objectContaining({
+        userId: "user-b",
+        conversationId: "conversation-id",
       }),
     );
   });

@@ -64,12 +64,17 @@ export class AuthService {
       throw new ForbiddenException('ACCOUNT_NOT_ALLOWED');
     }
 
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: {
-        revokedAt: new Date(),
-      },
+    // Atomic single-use rotation: only one concurrent request holding the
+    // same refresh token may revoke it. The loser sees count 0 and is
+    // rejected instead of minting a second session.
+    const revoked = await this.prisma.session.updateMany({
+      where: { id: session.id, revokedAt: null },
+      data: { revokedAt: new Date() },
     });
+
+    if (revoked.count === 0) {
+      throw new UnauthorizedException('INVALID_REFRESH_TOKEN');
+    }
 
     const tokens = await this.sessionService.createSession(
       session.userId,
@@ -91,7 +96,12 @@ export class AuthService {
       return;
     }
 
-    const sessionId = this.decodeRefreshSessionId(refreshToken);
+    let sessionId: string;
+    try {
+      sessionId = this.decodeRefreshSessionId(refreshToken);
+    } catch {
+      return;
+    }
 
     await this.prisma.session
       .update({
@@ -119,6 +129,10 @@ export class AuthService {
     try {
       const payload = await this.jwt.verifyAsync<AccessTokenPayload>(token, {
         secret: this.config.getOrThrow<string>('auth.jwtAccessSecret'),
+        issuer:
+          this.config.get<string>('auth.jwtIssuer') ?? 'hirotoli-api',
+        audience:
+          this.config.get<string>('auth.jwtAudience') ?? 'hirotoli-client',
       });
 
       const session = await this.prisma.session.findUnique({
@@ -159,9 +173,22 @@ export class AuthService {
   }
 
   private decodeRefreshSessionId(refreshToken: string): string {
-    const [sessionId] = refreshToken.split('.');
+    const parts = refreshToken.split('.');
 
-    if (!sessionId) {
+    if (parts.length !== 2) {
+      throw new UnauthorizedException('INVALID_REFRESH_TOKEN');
+    }
+
+    const [sessionId, secret] = parts;
+
+    if (
+      !sessionId ||
+      !secret ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        sessionId,
+      ) ||
+      !/^[A-Za-z0-9_-]{43,128}$/.test(secret)
+    ) {
       throw new UnauthorizedException('INVALID_REFRESH_TOKEN');
     }
 

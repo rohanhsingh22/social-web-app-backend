@@ -12,6 +12,8 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 import { ModerationService } from "@app/modules/moderation/moderation.service";
+import { profileCardSelect, toProfileCard } from "@app/common/profile-card";
+import { NotificationsService } from "@app/modules/notifications/notifications.service";
 
 const DEFAULT_MESSAGE_LIMIT = 50;
 const MAX_MESSAGE_LIMIT = 100;
@@ -52,6 +54,7 @@ export class DirectMessagesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly moderation: ModerationService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async listConversations(userId: string) {
@@ -182,6 +185,20 @@ export class DirectMessagesService {
       data: { updatedAt: new Date() },
       select: { id: true },
     });
+
+    const senderName = message.sender.profile?.displayName ?? 'Someone';
+
+    for (const recipientUserId of conversation.members
+      .map((member) => member.userId)
+      .filter((memberUserId) => memberUserId !== userId)) {
+      await this.notifications.newDirectMessage(recipientUserId, {
+        senderId: userId,
+        senderName,
+        conversationId,
+        messageId: message.id,
+        preview: bodyText,
+      });
+    }
 
     return {
       message: this.mapMessage(message),
@@ -347,7 +364,9 @@ export class DirectMessagesService {
       createdAt: message.createdAt,
       sender: {
         id: message.sender.id,
-        profile: message.sender.profile,
+        profile: message.sender.profile
+          ? { ...toProfileCard(message.sender.profile) }
+          : null,
       },
     };
   }
@@ -355,9 +374,7 @@ export class DirectMessagesService {
   private publicProfileSelect() {
     return {
       userId: true,
-      username: true,
-      displayName: true,
-      avatarUrl: true,
+      ...profileCardSelect,
       bio: true,
       ageGroup: true,
       region: true,
@@ -368,9 +385,7 @@ export class DirectMessagesService {
 
   private senderProfileSelect() {
     return {
-      username: true,
-      displayName: true,
-      avatarUrl: true,
+      ...profileCardSelect,
     } satisfies Prisma.ProfileSelect;
   }
 }

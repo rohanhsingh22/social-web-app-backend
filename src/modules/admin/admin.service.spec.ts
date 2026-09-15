@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MessageStatus, ReportStatus, UserStatus } from '@prisma/client';
 import { PrismaService } from '@app/core/prisma/prisma.service';
+import { NotificationsService } from '@app/modules/notifications/notifications.service';
 import { ReportsService } from '@app/modules/reports/reports.service';
 import { AdminService } from './admin.service';
 
@@ -46,11 +47,15 @@ describe('AdminService', () => {
     const reportsService = {
       listForAdmin: jest.fn(),
     } as unknown as ReportsService;
+    const notifications = {
+      legalNotice: jest.fn().mockResolvedValue({ id: 'notification-1' }),
+    } as unknown as NotificationsService;
 
     return {
-      service: new AdminService(prisma, reportsService),
+      service: new AdminService(prisma, reportsService, notifications),
       prisma,
       reportsService,
+      notifications,
       tx,
     };
   };
@@ -123,5 +128,41 @@ describe('AdminService', () => {
     await expect(
       service.deleteDirectMessage('admin-id', 'missing', {}),
     ).rejects.toThrow(NotFoundException);
+  });
+
+  it('sends legal notices through the notification system with an audit', async () => {
+    const { service, prisma, notifications } = createService();
+    const userFindUnique = jest.fn().mockResolvedValue({
+      id: 'user-1',
+      status: UserStatus.active,
+    });
+    (prisma as unknown as { user: { findUnique: jest.Mock } }).user = {
+      findUnique: userFindUnique,
+    };
+    const moderationCreate = jest.fn().mockResolvedValue({});
+    (
+      prisma as unknown as { moderationAction: { create: jest.Mock } }
+    ).moderationAction = { create: moderationCreate };
+
+    await expect(
+      service.sendLegalNotice('admin-id', {
+        userId: 'user-1',
+        title: 'Terms update',
+        body: 'Please review the new terms.',
+      }),
+    ).resolves.toEqual({ id: 'notification-1' });
+    expect(notifications.legalNotice).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        title: 'Terms update',
+        adminId: 'admin-id',
+      }),
+    );
+    expect(moderationCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'send_legal_notice',
+        targetUserId: 'user-1',
+      }),
+    });
   });
 });

@@ -9,7 +9,9 @@ describe('ChannelGateway', () => {
   const createGateway = () => {
     const authenticate = jest.fn();
     const getBySlugOrId = jest.fn();
-    const createMessage = jest.fn();
+    const getToliChannelById = jest.fn();
+    const hasToliChannelAccess = jest.fn().mockResolvedValue(true);
+    const persistChannelMessage = jest.fn();
     const markOnline = jest.fn();
     const markOffline = jest.fn();
     const joinChannel = jest.fn();
@@ -20,7 +22,9 @@ describe('ChannelGateway', () => {
     const auth = { authenticate } as unknown as RealtimeAuthService;
     const channels = {
       getBySlugOrId,
-      createMessage,
+      getToliChannelById,
+      hasToliChannelAccess,
+      persistChannelMessage,
     } as unknown as ChannelsService;
     const presence = {
       markOnline,
@@ -42,7 +46,9 @@ describe('ChannelGateway', () => {
       gateway,
       authenticate,
       getBySlugOrId,
-      createMessage,
+      getToliChannelById,
+      hasToliChannelAccess,
+      persistChannelMessage,
       markOnline,
       markOffline,
       joinChannel,
@@ -162,11 +168,11 @@ describe('ChannelGateway', () => {
     const {
       gateway,
       getBySlugOrId,
-      createMessage,
+      persistChannelMessage,
       checkChannelMessage,
     } = createGateway();
-    getBySlugOrId.mockResolvedValue({ id: 'channel-1' });
-    createMessage.mockResolvedValue({ id: 'message-1', body: 'hello' });
+    getBySlugOrId.mockResolvedValue({ id: 'channel-1', toliId: null });
+    persistChannelMessage.mockResolvedValue({ id: 'message-1', body: 'hello' });
     checkChannelMessage.mockResolvedValue({ allowed: true });
     const socket = createSocket({ id: 'user-1', status: 'active', role: 'user' });
 
@@ -177,7 +183,11 @@ describe('ChannelGateway', () => {
       }),
     ).resolves.toEqual({ ok: true, message: { id: 'message-1', body: 'hello' } });
 
-    expect(createMessage).toHaveBeenCalledWith('channel-1', 'user-1', 'hello');
+    expect(persistChannelMessage).toHaveBeenCalledWith(
+      'channel-1',
+      'user-1',
+      'hello',
+    );
     expect(checkChannelMessage).toHaveBeenCalledWith('user-1', 'channel-1');
   });
 
@@ -191,5 +201,78 @@ describe('ChannelGateway', () => {
 
     expect(markOffline).toHaveBeenCalledWith('user-1', undefined);
     expect(leaveChannel).toHaveBeenCalledWith('channel-1', 'user-1');
+  });
+
+  it('rejects Toli room joins for guests and other Tolies', async () => {
+    const {
+      gateway,
+      getBySlugOrId,
+      getToliChannelById,
+      hasToliChannelAccess,
+    } = createGateway();
+    getBySlugOrId.mockRejectedValue(new Error('not public'));
+    getToliChannelById.mockResolvedValue({
+      id: 'toli-channel-1',
+      toliId: 'vector-id',
+    });
+
+    const guest = createSocket();
+    await expect(
+      gateway.joinChannel(guest, { channelId: 'toli-channel-1' }),
+    ).resolves.toEqual({ ok: false, code: 'AUTH_REQUIRED' });
+
+    hasToliChannelAccess.mockResolvedValue(false);
+    const outsider = createSocket({
+      id: 'user-2',
+      status: 'active',
+      role: 'user',
+    });
+    await expect(
+      gateway.joinChannel(outsider, { channelId: 'toli-channel-1' }),
+    ).resolves.toEqual({ ok: false, code: 'TOLI_FORBIDDEN' });
+    expect(outsider.join).not.toHaveBeenCalled();
+
+    hasToliChannelAccess.mockResolvedValue(true);
+    const member = createSocket({
+      id: 'user-1',
+      status: 'active',
+      role: 'user',
+    });
+    await expect(
+      gateway.joinChannel(member, { channelId: 'toli-channel-1' }),
+    ).resolves.toEqual({ ok: true, channelId: 'toli-channel-1' });
+  });
+
+  it('rejects Toli room sends from other Tolies', async () => {
+    const {
+      gateway,
+      getBySlugOrId,
+      getToliChannelById,
+      hasToliChannelAccess,
+      persistChannelMessage,
+    } = createGateway();
+    getBySlugOrId.mockRejectedValue(new Error('not public'));
+    getToliChannelById.mockResolvedValue({
+      id: 'toli-channel-1',
+      toliId: 'vector-id',
+    });
+    hasToliChannelAccess.mockResolvedValue(false);
+    const socket = createSocket({
+      id: 'user-2',
+      status: 'active',
+      role: 'user',
+    });
+
+    await expect(
+      gateway.sendChannelMessage(socket, {
+        channelId: 'toli-channel-1',
+        body: 'hello',
+      }),
+    ).resolves.toEqual({ ok: false, code: 'TOLI_FORBIDDEN' });
+    expect(socket.emit).toHaveBeenCalledWith(
+      'channel:error',
+      expect.objectContaining({ code: 'TOLI_FORBIDDEN' }),
+    );
+    expect(persistChannelMessage).not.toHaveBeenCalled();
   });
 });

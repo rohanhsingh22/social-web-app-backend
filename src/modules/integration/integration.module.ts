@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { IntegrationController } from './integration.controller';
 import { IntegrationService } from './integration.service';
+import { OAuthStateService } from './oauth-state.service';
 import { ProviderRegistry } from './providers/provider.registry';
 import { FacebookProvider } from './providers/facebook.provider';
 import { GoogleProvider } from './providers/google.provider';
@@ -12,6 +13,7 @@ const OAUTH_PROVIDERS = 'OAUTH_PROVIDERS';
   controllers: [IntegrationController],
   providers: [
     IntegrationService,
+    OAuthStateService,
     ProviderRegistry,
     FacebookProvider,
     GoogleProvider,

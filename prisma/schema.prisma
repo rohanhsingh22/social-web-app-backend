@@ -25,6 +25,7 @@ enum ChannelType {
   age
   region
   general
+  toli
 }
 
 enum ChannelVisibility {
@@ -70,6 +71,18 @@ enum BannedWordSeverity {
   high
 }
 
+enum ProfilePictureType {
+  provider
+  toli
+}
+
+enum NotificationType {
+  connection_request
+  connection_accepted
+  new_dm
+  legal_notice
+}
+
 model User {
   id                String             @id @default(uuid()) @db.Uuid
   publicUserId      String             @unique @map("public_user_id")
@@ -93,6 +106,14 @@ model User {
   reviewedReports   Report[]           @relation("ReportReviewer")
   blocksMade        Block[]            @relation("BlockBlocker")
   blocksReceived    Block[]            @relation("BlockBlocked")
+  thoughts          Thought[]
+  thoughtLikes      ThoughtLike[]
+  thoughtComments   ThoughtComment[]
+  thoughtShares     ThoughtShare[]
+  thoughtHides      ThoughtHide[]
+  thoughtReports    ThoughtReport[]
+  thoughtEvents     ThoughtEvent[]
+  notifications     Notification[]
 
   @@map("users")
 }
@@ -134,7 +155,15 @@ model Profile {
   userId          String   @id @map("user_id") @db.Uuid
   username        String   @unique
   displayName     String   @map("display_name")
+  // Lowercase(trim(displayName)). Uniqueness authority for Launch 1 identity:
+  // Rohan/rohan/ROHAN collide. Always written alongside displayName.
+  displayNameNormalized String @unique @map("display_name_normalized")
   avatarUrl       String?  @map("avatar_url")
+  // Active profile-picture source. Provider avatar lives on AuthIdentity and
+  // is synced at login; a Toli avatar is a fixed catalog key (toliAvatarKey)
+  // validated against the user's current Toli. Never overwritten implicitly.
+  profilePictureType ProfilePictureType @default(provider) @map("profile_picture_type")
+  toliAvatarKey      String?            @map("toli_avatar_key")
   bio             String?
   dob             DateTime? @db.Date
   ageGroup        String?  @map("age_group")
@@ -144,6 +173,10 @@ model Profile {
   city            String?
   primaryLanguage String?  @map("primary_language")
   languages       String[]
+  interests       String[] @default([])
+  // Optional clan identity. Null = no Toli (fully supported, no Toli room).
+  toliId          String?  @map("toli_id") @db.Uuid
+  toli            Toli?    @relation(fields: [toliId], references: [id], onDelete: SetNull)
   isComplete      Boolean  @default(false) @map("is_complete")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -152,6 +185,7 @@ model Profile {
   @@index([displayName])
   @@index([region])
   @@index([ageGroup])
+  @@index([toliId])
   @@map("profiles")
 }
 
@@ -167,8 +201,24 @@ model Channel {
   createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
   messages  ChannelMessage[]
+  // Set only for Toli rooms: exactly one channel per Toli. Null = public room.
+  toliId    String?          @unique @map("toli_id") @db.Uuid
+  toli      Toli?            @relation(fields: [toliId], references: [id], onDelete: SetNull)
 
   @@map("channels")
+}
+
+model Toli {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @unique
+  description String
+  motto       String
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  profiles    Profile[]
+  channels    Channel[]
+
+  @@map("tolis")
 }
 
 model ChannelMessage {
@@ -249,6 +299,112 @@ model DirectMessage {
   @@map("direct_messages")
 }
 
+model Thought {
+  id        String        @id @default(uuid()) @db.Uuid
+  authorId  String        @map("author_id") @db.Uuid
+  body      String
+  status    MessageStatus @default(active)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likes     ThoughtLike[]
+  comments  ThoughtComment[]
+  shares    ThoughtShare[]
+  hides     ThoughtHide[]
+  reports   ThoughtReport[]
+  events    ThoughtEvent[]
+
+  @@index([authorId])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("thoughts")
+}
+
+model ThoughtLike {
+  thoughtId String   @map("thought_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  thought   Thought  @relation(fields: [thoughtId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([thoughtId, userId])
+  @@map("thought_likes")
+}
+
+model ThoughtComment {
+  id        String        @id @default(uuid()) @db.Uuid
+  thoughtId String        @map("thought_id") @db.Uuid
+  authorId  String        @map("author_id") @db.Uuid
+  body      String
+  status    MessageStatus @default(active)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  thought   Thought       @relation(fields: [thoughtId], references: [id], onDelete: Cascade)
+  author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([thoughtId, createdAt(sort: Desc)])
+  @@index([authorId])
+  @@map("thought_comments")
+}
+
+model ThoughtShare {
+  thoughtId String   @map("thought_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  thought   Thought  @relation(fields: [thoughtId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([thoughtId, userId])
+  @@map("thought_shares")
+}
+
+model ThoughtHide {
+  thoughtId String   @map("thought_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  thought   Thought  @relation(fields: [thoughtId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([thoughtId, userId])
+  @@map("thought_hides")
+}
+
+model ThoughtReport {
+  id         String       @id @default(uuid()) @db.Uuid
+  thoughtId  String       @map("thought_id") @db.Uuid
+  reporterId String       @map("reporter_id") @db.Uuid
+  reason     ReportReason
+  details    String?
+  status     ReportStatus @default(open)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  reviewedBy String?      @map("reviewed_by") @db.Uuid
+  reviewedAt DateTime?    @map("reviewed_at") @db.Timestamptz(6)
+  thought    Thought      @relation(fields: [thoughtId], references: [id], onDelete: Cascade)
+  reporter   User         @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([thoughtId])
+  @@index([status])
+  @@map("thought_reports")
+}
+
+model ThoughtEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  actorId   String   @map("actor_id") @db.Uuid
+  // Null for non-thought events (profile_open, connection_request).
+  thoughtId String?  @map("thought_id") @db.Uuid
+  type      String
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  actor     User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  thought   Thought? @relation(fields: [thoughtId], references: [id], onDelete: Cascade)
+
+  @@index([thoughtId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
+  @@map("thought_events")
+}
+
 model Report {
   id                     String          @id @default(uuid()) @db.Uuid
   reporterId             String          @map("reporter_id") @db.Uuid
@@ -282,6 +438,23 @@ model Block {
 
   @@unique([blockerId, blockedUserId])
   @@map("blocks")
+}
+
+model Notification {
+  id          String           @id @default(uuid()) @db.Uuid
+  recipientId String           @map("recipient_id") @db.Uuid
+  type        NotificationType
+  title       String
+  body        String?
+  metadata    Json?
+  readAt      DateTime?        @map("read_at") @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt   DateTime?        @map("expires_at") @db.Timestamptz(6)
+  recipient   User             @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, createdAt(sort: Desc)])
+  @@index([recipientId, readAt])
+  @@map("notifications")
 }
 
 model ModerationAction {

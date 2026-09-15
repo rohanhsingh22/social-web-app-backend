@@ -6,6 +6,7 @@ import {
 import { ConnectionStatus, MessageStatus, UserStatus } from "@prisma/client";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 import { ModerationService } from "@app/modules/moderation/moderation.service";
+import { NotificationsService } from "@app/modules/notifications/notifications.service";
 import { DirectMessagesService } from "./direct-messages.service";
 
 describe("DirectMessagesService", () => {
@@ -88,11 +89,15 @@ describe("DirectMessagesService", () => {
     const moderation = {
       assertMessageAllowed: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModerationService;
+    const notifications = {
+      newDirectMessage: jest.fn().mockResolvedValue({ id: "notification-1" }),
+    } as unknown as NotificationsService;
 
     return {
-      service: new DirectMessagesService(prisma, moderation),
+      service: new DirectMessagesService(prisma, moderation, notifications),
       prisma,
       moderation,
+      notifications,
     };
   };
 
@@ -140,8 +145,52 @@ describe("DirectMessagesService", () => {
       .mockResolvedValue(conversation as never);
 
     await expect(
-      service.getMessages("user-c", "conversation-id"),
+      service.createMessage("user-a", "conversation-id", "Hello"),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it("returns the unified identity card on message senders", async () => {
+    const { service, prisma } = createService();
+    jest
+      .mocked(prisma.conversation.findUnique)
+      .mockResolvedValue(conversation as never);
+    allowDirectMessage(prisma);
+    jest.mocked(prisma.directMessage.create).mockResolvedValue({
+      ...message,
+      sender: {
+        id: "user-a",
+        profile: {
+          username: "alice",
+          displayName: "alice",
+          avatarUrl: null,
+          profilePictureType: "toli",
+          toliAvatarKey: "vector_01",
+          toli: { id: "toli-id", name: "Vector" },
+        },
+      },
+    } as never);
+    jest
+      .mocked(prisma.conversation.update)
+      .mockResolvedValue({ id: "conversation-id" } as never);
+
+    await expect(
+      service.createMessage("user-a", "conversation-id", "Hello there"),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          sender: expect.objectContaining({
+            profile: expect.objectContaining({
+              displayName: "alice",
+              profilePicture: expect.objectContaining({
+                type: "toli",
+                toliAvatarKey: "vector_01",
+              }),
+              toli: { id: "toli-id", name: "Vector" },
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("hides missing conversations as not found", async () => {
@@ -212,6 +261,29 @@ describe("DirectMessagesService", () => {
           conversationId: "conversation-id",
           senderId: "user-a",
         }),
+      }),
+    );
+  });
+
+  it("notifies recipients after persisting a direct message", async () => {
+    const { service, prisma, notifications } = createService();
+    jest
+      .mocked(prisma.conversation.findUnique)
+      .mockResolvedValue(conversation as never);
+    allowDirectMessage(prisma);
+    jest.mocked(prisma.directMessage.create).mockResolvedValue(message as never);
+    jest
+      .mocked(prisma.conversation.update)
+      .mockResolvedValue({ id: "conversation-id" } as never);
+
+    await service.createMessage("user-a", "conversation-id", "Hello there");
+
+    expect(notifications.newDirectMessage).toHaveBeenCalledWith(
+      "user-b",
+      expect.objectContaining({
+        senderId: "user-a",
+        conversationId: "conversation-id",
+        messageId: "message-id",
       }),
     );
   });

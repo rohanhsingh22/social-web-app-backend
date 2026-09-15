@@ -13,16 +13,19 @@ import {
   UserStatus,
 } from '@prisma/client';
 import { PrismaService } from '@app/core/prisma/prisma.service';
+import { NotificationsService } from '@app/modules/notifications/notifications.service';
 import { ReportsService } from '@app/modules/reports/reports.service';
 import { AdminActionDto } from './dto/admin-action.dto';
 import { CreateBannedWordDto, UpdateBannedWordDto } from './dto/banned-word.dto';
 import { CreateChannelDto, UpdateChannelDto } from './dto/channel-admin.dto';
+import { LegalNoticeDto } from './dto/legal-notice.dto';
 
 @Injectable()
 export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly reportsService: ReportsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   listReports(status?: ReportStatus, limit?: string) {
@@ -89,12 +92,39 @@ export class AdminService {
     });
   }
 
+  async sendLegalNotice(adminId: string, dto: LegalNoticeDto) {
+    const target = await this.prisma.user.findUnique({
+      where: { id: dto.userId },
+      select: { id: true, status: true },
+    });
+
+    if (!target || target.status === UserStatus.deleted) {
+      throw new NotFoundException('USER_NOT_FOUND');
+    }
+
+    const notice = await this.notifications.legalNotice(target.id, {
+      title: dto.title,
+      body: dto.body,
+      adminId,
+    });
+
+    await this.prisma.moderationAction.create({
+      data: {
+        adminId,
+        targetUserId: target.id,
+        action: 'send_legal_notice',
+        metadata: { notificationId: notice.id },
+      },
+    });
+
+    return notice;
+  }
+
   async deleteChannelMessage(
     adminId: string,
     messageId: string,
     dto: AdminActionDto,
-  ) {
-    return this.prisma.$transaction(async (tx) => {
+  ) {    return this.prisma.$transaction(async (tx) => {
       const message = await tx.channelMessage
         .update({
           where: { id: messageId },

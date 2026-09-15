@@ -1,0 +1,3082 @@
+# HiRotoli Launch 1
+
+## Complete Implementation & Fix Plan
+
+> **Purpose:** This document is the implementation roadmap for bringing the current HiRotoli codebase to Launch 1.
+>
+> It covers both:
+>
+> * **FIX / CHANGE** — existing functionality that must be corrected, hardened, refactored, optimized, or integrated.
+> * **IMPLEMENT** — functionality that does not currently exist and must be built.
+>
+> The phases are intentionally ordered by dependency. The goal is to avoid building new features on top of unstable authentication, profile, realtime, database, or infrastructure code.
+
+---
+
+# 1. Launch 1 Scope
+
+Launch 1 includes:
+
+* Authentication & Account Creation
+* Profiles
+* 3D Character
+* Toli
+* Toli Avatar / Profile Picture System
+* Public Chat
+* Connections
+* Direct Messages
+* Thoughts
+* Safety & Moderation
+* Notifications
+* Home & Navigation
+* Worker Functionality
+* Deployment & Infrastructure
+* Production Testing
+
+## New functionality
+
+Only the following are genuinely new feature areas:
+
+1. Toli
+2. Thoughts
+3. Profile Picture / Toli Avatar System
+4. Notifications
+5. Worker Functionality
+
+Everything else already exists to some degree and should be treated as **existing functionality that requires fixes, hardening, refactoring, optimization, or integration**.
+
+---
+
+# 2. Core Product Rules
+
+These rules are fixed and must not be changed accidentally during implementation.
+
+## 2.1 User Identity
+
+The OAuth provider identity and the HiRotoli profile identity are different.
+
+OAuth provides:
+
+* provider user ID
+* provider email
+* provider display name
+* provider profile picture
+
+HiRotoli owns:
+
+* display name
+* bio
+* interests
+* Toli
+* profile-picture selection
+* 3D character
+* other profile information
+
+The UI must use the HiRotoli profile data.
+
+---
+
+# 3. Display Name Rules
+
+## Required
+
+Display Name is required during onboarding.
+
+A user cannot complete onboarding without it.
+
+## Unique
+
+Display Name must be unique.
+
+Uniqueness should be case-insensitive.
+
+Therefore:
+
+```text
+Rohan
+rohan
+ROHAN
+```
+
+must be treated as the same display name.
+
+This must be enforced at the database/application level, not only through frontend validation.
+
+## OAuth must not overwrite Display Name
+
+Example:
+
+```text
+Google name:
+Rohit Kumar
+
+HiRotoli display name:
+Rohan
+```
+
+HiRotoli must continue showing:
+
+```text
+Rohan
+```
+
+even if Google later changes the user's provider name.
+
+OAuth login must never replace the user's chosen HiRotoli display name.
+
+---
+
+# 4. Profile Picture Rules
+
+There are two profile-picture sources.
+
+## Provider Avatar
+
+The user can use their Google/Facebook provider profile picture.
+
+If Provider Avatar is active:
+
+```text
+Login
+  ↓
+Read latest provider avatar
+  ↓
+Update stored provider avatar
+  ↓
+Show latest provider avatar
+```
+
+This synchronization should happen on every successful provider login.
+
+This is necessary because a user can change their Google/Facebook profile picture outside HiRotoli.
+
+## Toli Avatar
+
+The user can instead choose an avatar belonging to their selected Toli.
+
+If Toli Avatar is active:
+
+```text
+Login
+  ↓
+Provider avatar may be refreshed
+  ↓
+Toli avatar remains active
+```
+
+The provider avatar must not replace a selected Toli avatar.
+
+## Active profile picture
+
+The system must know which source is currently active.
+
+Conceptually:
+
+```text
+profilePictureType:
+    PROVIDER
+    TOLI
+```
+
+Provider information and Toli-avatar information should be stored independently.
+
+---
+
+# 5. 3D Character Rules
+
+The 3D character is completely separate from the profile picture.
+
+Every user has a 3D character.
+
+It is used for the user's Home/personal experience.
+
+It is NOT used as:
+
+* profile picture
+* Thought author avatar
+* chat avatar
+* connection avatar
+* DM avatar
+
+Conceptually:
+
+```text
+USER
+│
+├── Profile Picture
+│     ├── Provider Avatar
+│     └── Toli Avatar
+│
+└── 3D Character
+      └── characterConfig
+```
+
+The existing `characterConfig` must remain a first-class part of the profile.
+
+---
+
+# 6. Toli Product Definition
+
+There are currently five predefined Tolies:
+
+* Vector
+* Wave
+* Quantum
+* Orbit
+* Flux
+
+Toli is a clan/community identity.
+
+It is not a personality-test result.
+
+It is not a gaming clan.
+
+---
+
+# 7. Toli Membership Rules
+
+A user can have:
+
+```text
+0 or 1 Toli
+```
+
+Toli selection is optional.
+
+During onboarding:
+
+```text
+Choose your Toli
+
+[ Vector ]
+[ Wave ]
+[ Quantum ]
+[ Orbit ]
+[ Flux ]
+
+[ Skip ]
+```
+
+If the user skips:
+
+```text
+toli = null
+```
+
+The user can continue using HiRotoli normally.
+
+They simply do not receive a Toli chat room.
+
+A user can later choose a Toli.
+
+---
+
+# 8. Toli Chat Rules
+
+A user receives access to only the chat room associated with their selected Toli.
+
+Example:
+
+```text
+User
+  ↓
+Vector
+  ↓
+Vector Chat
+```
+
+A Vector user should not receive access to:
+
+```text
+Wave Chat
+Quantum Chat
+Orbit Chat
+Flux Chat
+```
+
+A user without a Toli does not receive a Toli chat room.
+
+## Reuse existing chat architecture
+
+Do NOT create:
+
+```text
+ToliMessage
+ToliSocket
+ToliRealtimeService
+```
+
+Instead reuse:
+
+```text
+Channel
+ChannelMessage
+Socket.IO
+Redis adapter
+existing moderation
+existing rate limiting
+existing pagination
+```
+
+The existing channel system already has `Channel` and `ChannelMessage` models and message indexes, making it the appropriate foundation for Toli rooms.
+
+Toli channels should simply be identifiable as Toli-specific channels.
+
+For example, conceptually:
+
+```text
+Channel
+├── GENERAL
+├── ENGLISH
+├── HINDI
+├── GAMING
+├── STUDY
+├── MUSIC
+├── TOLI_VECTOR
+├── TOLI_WAVE
+├── TOLI_QUANTUM
+├── TOLI_ORBIT
+└── TOLI_FLUX
+```
+
+The exact enum/schema representation should follow the existing channel architecture.
+
+---
+
+# 9. Toli Avatar Rules
+
+Each Toli gets a fixed collection of avatars.
+
+Initial target:
+
+```text
+5 Tolies × 5 avatars = 25 avatars
+```
+
+Avatars should be:
+
+* colorful
+* stylized
+* cartoonized
+* non-realistic
+* not near-real human portraits
+
+Fixed assets can remain frontend/static assets for Launch 1.
+
+No object-storage system is required for these fixed Toli avatars.
+
+## Validation
+
+The backend must validate:
+
+```text
+selected Toli
+      +
+selected avatar
+```
+
+The avatar must belong to the user's current Toli.
+
+The frontend must not be trusted to enforce this.
+
+---
+
+# 10. Toli Changes
+
+If a user changes Toli:
+
+```text
+Vector
+  ↓
+Wave
+```
+
+the currently selected Vector avatar cannot remain active.
+
+The user must select a valid Wave avatar.
+
+The old Vector avatar does not need to be deleted.
+
+The active combination must always satisfy:
+
+```text
+profilePictureType = TOLI
+AND
+avatar belongs to current Toli
+```
+
+---
+
+# 11. Thoughts Product Definition
+
+Thoughts is a text-only social feed.
+
+There are no images or videos in Thoughts for Launch 1.
+
+A user can:
+
+* open Thoughts
+* view thoughts
+* create a thought
+* open/read a thought
+* like
+* comment
+* share
+* hide
+* report
+* open the author's profile
+* connect with the author where appropriate
+
+---
+
+# 12. Thoughts Feed
+
+Two main tabs:
+
+```text
+For You
+Fresh
+```
+
+## Fresh
+
+Fresh should prioritize recently created content.
+
+## For You
+
+For You uses deterministic/rule-based ranking.
+
+No ML system is required for Launch 1.
+
+The ranking can consider:
+
+* freshness
+* interests
+* Toli relevance
+* meaningful interactions
+* quality
+* conversation quality
+* discovery
+* author diversity
+* reports
+* hides
+* spam
+* repetition
+
+The target is not simply:
+
+```text
+most likes = highest
+```
+
+The target is:
+
+> What thought might make this user glad they opened HiRotoli?
+
+---
+
+# 13. Thoughts Candidate Pipeline
+
+The implementation should conceptually follow:
+
+```text
+Candidate Thoughts
+        ↓
+Safety Filtering
+        ↓
+Interest Matching
+        ↓
+Toli Matching
+        ↓
+Freshness
+        ↓
+Quality / Conversation Signals
+        ↓
+Discovery
+        ↓
+Author Diversity
+        ↓
+Final Feed
+```
+
+This should be implemented as a deterministic scoring service so the ranking rules can evolve without rewriting the feed API.
+
+---
+
+# 14. Thoughts Cold Start
+
+A new user has little or no interaction history.
+
+For cold-start users:
+
+* prioritize fresh content
+* mix topics
+* mix authors
+* include popular/high-quality content
+* use Toli when available
+* use interests when available
+
+Do not create a complex ML pipeline for Launch 1.
+
+---
+
+# 15. Thoughts Events
+
+The backend should record useful interaction events.
+
+Initial events:
+
+```text
+thought_impression
+thought_open
+thought_like
+thought_comment
+thought_share
+thought_hide
+thought_report
+profile_open
+connection_request
+```
+
+These events provide the foundation for improving the deterministic ranking later.
+
+---
+
+# 16. Notifications — Launch 1 Scope
+
+Notifications are intentionally limited.
+
+Only these notification types are implemented:
+
+## 16.1 Connection Request
+
+User A sends a connection request.
+
+User B receives:
+
+```text
+New connection request
+```
+
+## 16.2 Connection Accepted
+
+User B accepts the request.
+
+User A receives:
+
+```text
+Connection accepted
+```
+
+## 16.3 New DM
+
+A user receives a new direct message.
+
+They receive a notification.
+
+The notification system must work correctly with online and offline users, but **offline invite notifications are not part of Launch 1**.
+
+## 16.4 Legal Notice
+
+The platform can send legally important/system-required notices.
+
+Examples:
+
+* terms update
+* privacy update
+* legally required notice
+
+## Explicitly excluded
+
+Do NOT implement notifications for:
+
+* Thought likes
+* Thought comments
+* Thought shares
+* Toli activity
+* offline user invitations
+* marketing
+* promotional activity
+* general social activity
+
+This scope must remain intentionally small for Launch 1.
+
+---
+
+# 17. Notification Architecture
+
+Use one notification system.
+
+Do not create separate notification systems for:
+
+```text
+ConnectionNotificationService
+DMNotificationService
+ToliNotificationService
+ThoughtNotificationService
+```
+
+Instead:
+
+```text
+Notification
+    │
+    ├── connection_request
+    ├── connection_accepted
+    ├── new_dm
+    └── legal_notice
+```
+
+Conceptually:
+
+```text
+Notification
+├── id
+├── recipientId
+├── type
+├── title
+├── body
+├── metadata
+├── readAt
+├── createdAt
+└── expiresAt (optional)
+```
+
+The exact schema should follow the existing project's Prisma conventions.
+
+---
+
+# 18. Worker Functionality
+
+The existing worker application is currently incomplete/placeholder-oriented.
+
+Worker functionality should be implemented only for jobs that genuinely belong outside the request/realtime process.
+
+The worker should eventually handle:
+
+* asynchronous notification processing where useful
+* notification fan-out where necessary
+* cleanup jobs
+* expired session cleanup
+* other explicitly asynchronous workloads introduced by Launch 1
+
+Profile image processing/upload work remains deferred.
+
+Do not build an unnecessary background-job architecture for every operation.
+
+---
+
+# 19. Worker Architecture
+
+The desired structure is:
+
+```text
+API
+ │
+ ├── validates request
+ ├── writes required DB data
+ └── publishes background job
+              │
+              ↓
+           Redis Queue
+              │
+              ↓
+           Worker
+              │
+              ├── processes job
+              ├── retries failures
+              └── records/logs result
+```
+
+Realtime work should remain in the realtime application.
+
+CPU/background work should move to the worker.
+
+Do not make the API wait for jobs that do not need to be synchronous.
+
+---
+
+# 20. Phase Strategy
+
+The project should NOT be implemented in this order:
+
+```text
+Toli
+Thoughts
+Notifications
+Worker
+then fix bugs
+```
+
+That creates unnecessary risk.
+
+Instead use:
+
+```text
+PHASE 0
+Repository baseline
+        ↓
+PHASE 1
+Critical foundation fixes
+        ↓
+PHASE 2
+Database / architecture preparation
+        ↓
+PHASE 3
+Profile + OAuth identity fixes
+        ↓
+PHASE 4
+Toli + Toli avatar
+        ↓
+PHASE 5
+Thoughts
+        ↓
+PHASE 6
+Notifications
+        ↓
+PHASE 7
+Worker functionality
+        ↓
+PHASE 8
+Cross-feature integration
+        ↓
+PHASE 9
+Testing / security
+        ↓
+PHASE 10
+Production deployment
+        ↓
+PHASE 11
+Load testing / final stabilization
+```
+
+---
+
+# PHASE 0 — Repository Baseline
+
+## Objective
+
+Before modifying anything, establish the exact current state.
+
+## Tasks
+
+### Backend
+
+Review:
+
+* NestJS applications
+* API app
+* realtime app
+* worker app
+* Prisma schema
+* migrations
+* Redis integration
+* Socket.IO gateways
+* authentication
+* profile
+* channels
+* connections
+* DMs
+* moderation
+
+### Frontend
+
+Review:
+
+* Vite configuration
+* React Router
+* Redux Toolkit
+* RTK Query
+* auth state
+* onboarding
+* profile
+* home
+* chat
+* connections
+* DMs
+* settings
+* Thoughts placeholder
+
+### Establish baseline
+
+Run:
+
+```text
+lint
+typecheck
+unit tests
+integration tests
+build
+frontend build
+backend build
+database migration check
+```
+
+Record existing failures.
+
+Do not mix baseline failures with new-feature failures.
+
+---
+
+# PHASE 1 — Critical Foundation Fixes
+
+This is the first actual coding phase.
+
+Do not implement Toli or Thoughts until the critical foundation is stable.
+
+---
+
+## 1. OAuth State Security
+
+The OAuth flow needs cryptographic state protection.
+
+Implement:
+
+```text
+OAuth start
+    ↓
+generate cryptographically random state
+    ↓
+store state in Redis with short TTL
+    ↓
+redirect provider
+    ↓
+callback
+    ↓
+validate state
+    ↓
+delete state
+    ↓
+continue login
+```
+
+Reject:
+
+* missing state
+* invalid state
+* expired state
+* reused state
+
+---
+
+# 2. OAuth Profile Synchronization
+
+Separate:
+
+```text
+provider-owned fields
+```
+
+from:
+
+```text
+HiRotoli-owned fields
+```
+
+## Provider-owned
+
+Synchronize:
+
+* provider avatar
+* provider email if appropriate
+* provider metadata
+
+## HiRotoli-owned
+
+Never overwrite:
+
+* displayName
+* bio
+* Toli
+* interests
+* profile-picture choice
+* 3D character
+
+---
+
+# 3. Provider Avatar Synchronization
+
+Every successful OAuth login should update the stored provider avatar.
+
+Example:
+
+```text
+Google Avatar A
+     ↓
+first login
+     ↓
+DB
+
+Google Avatar B
+     ↓
+later login
+     ↓
+DB updated to B
+```
+
+However, if:
+
+```text
+profilePictureType = TOLI
+```
+
+the UI continues using the Toli avatar.
+
+---
+
+# 4. Display Name Enforcement
+
+Current profile structure has `displayName` and a username field. The final product identity must be based on the user-entered Display Name.
+
+Current schema already contains:
+
+```text
+displayName
+```
+
+and an index on it.
+
+The implementation must decide the final database representation and then enforce true uniqueness.
+
+For PostgreSQL, implement case-insensitive uniqueness correctly rather than relying on normal string comparison.
+
+The final implementation must support:
+
+```text
+Rohan
+```
+
+being unavailable if:
+
+```text
+rohan
+```
+
+already exists.
+
+---
+
+# 5. Refresh Token Rotation Race
+
+Refresh token rotation must be atomic.
+
+Problem:
+
+```text
+Request A ── refresh ──┐
+                       ├── same old token
+Request B ── refresh ──┘
+```
+
+Both requests must not successfully rotate the same refresh token.
+
+Use an atomic DB update/transaction/locking strategy.
+
+Expected behavior:
+
+```text
+old refresh token
+       ↓
+first request → succeeds
+       ↓
+old token revoked
+
+second request using old token
+       ↓
+rejected
+```
+
+---
+
+# 6. Malformed Refresh Token
+
+Validate refresh token format before querying Prisma.
+
+Expected format:
+
+```text
+sessionId.secret
+```
+
+Reject malformed values with an authentication error rather than allowing malformed input to reach database queries and cause a server error.
+
+---
+
+# 7. Access Token Validation
+
+Review the current access-token strategy.
+
+The project currently performs server-side session checks during access-token validation.
+
+Because the project uses Neon/PostgreSQL, unnecessary database work on every request can add latency.
+
+Prefer:
+
+```text
+JWT signature
++
+expiration
++
+issuer
++
+audience
+```
+
+for normal access-token verification.
+
+Use session state for:
+
+* refresh
+* revocation
+* account state changes
+* security-sensitive checks
+
+Keep the access-token lifetime short.
+
+Do not remove server-side session control.
+
+---
+
+# 8. JWT Hardening
+
+Add explicit:
+
+```text
+issuer
+audience
+```
+
+validation.
+
+Ensure production secrets are mandatory.
+
+Remove dead/unused JWT configuration.
+
+If an old refresh JWT secret is no longer needed because refresh tokens are opaque, remove the dead configuration rather than maintaining two refresh-token concepts.
+
+---
+
+# 9. Authentication Transport Simplification
+
+Avoid unnecessarily maintaining two access-token transports.
+
+Preferred model:
+
+```text
+Refresh token
+    ↓
+HttpOnly Secure cookie
+
+Access token
+    ↓
+memory
+    ↓
+Authorization header
+```
+
+The frontend already has in-memory access-token handling and refresh deduplication.
+
+Keep one clear responsibility for each token.
+
+---
+
+# 10. OAuth Refresh Duplication
+
+The callback success flow currently risks triggering duplicate session restoration.
+
+Make the flow:
+
+```text
+OAuth callback
+      ↓
+one session restoration
+      ↓
+one refresh
+      ↓
+store access token
+      ↓
+application starts
+```
+
+Do not perform two independent refresh calls.
+
+---
+
+# 11. Socket Authentication
+
+Socket connections must always use the current access token.
+
+Before reconnect:
+
+```text
+ensure fresh access token
+      ↓
+connect/reconnect
+```
+
+Do not allow a stale access token to remain attached to reconnect attempts.
+
+Apply this to:
+
+* channel socket
+* DM socket
+* notification socket
+
+---
+
+# 12. Rate Limiting
+
+Verify that the intended throttling guard is actually applied globally where required.
+
+Do not assume configuration alone means the guard is active.
+
+Protect:
+
+* authentication
+* refresh
+* onboarding/profile operations
+* connection requests
+* Thought creation
+* Thought interactions
+* chat
+* DMs
+* notification endpoints
+
+Use feature-appropriate limits.
+
+---
+
+# PHASE 2 — Database & Architecture Preparation
+
+Before implementing new features, prepare the data model.
+
+---
+
+# 1. Toli Model
+
+Create a Toli entity.
+
+Conceptually:
+
+```text
+Toli
+├── id
+├── name
+├── description
+├── motto
+├── createdAt
+└── updatedAt
+```
+
+The five records are seeded:
+
+```text
+Vector
+Wave
+Quantum
+Orbit
+Flux
+```
+
+Do not allow normal users to create new Tolies in Launch 1.
+
+---
+
+# 2. Profile → Toli
+
+Add a nullable Toli relationship:
+
+```text
+Profile
+   ↓
+toliId?
+```
+
+Nullable is required because Toli selection is optional.
+
+Add an index on `toliId`.
+
+---
+
+# 3. Toli Avatars
+
+Because the avatar collection is fixed, there does not need to be a database row for every static image if the avatar metadata can safely be represented as fixed keys.
+
+A practical representation is:
+
+```text
+avatarType:
+    PROVIDER
+    TOLI
+
+avatarKey:
+    vector_01
+    vector_02
+    ...
+```
+
+The backend must validate the key against the user's current Toli.
+
+The final DB shape should avoid storing arbitrary frontend-provided URLs as trusted avatar identity.
+
+---
+
+# 4. Provider Avatar Storage
+
+Keep provider avatar information associated with the OAuth identity.
+
+The existing `AuthIdentity` already has:
+
+```text
+providerDisplayName
+providerAvatarUrl
+```
+
+and should be used for provider-owned data.
+
+The profile should contain the active profile-picture selection rather than treating the provider identity itself as the visible profile identity.
+
+---
+
+# 5. Thoughts Models
+
+Create the minimum required data model.
+
+Conceptually:
+
+```text
+Thought
+├── id
+├── authorId
+├── body
+├── status
+├── createdAt
+├── updatedAt
+└── deletedAt
+```
+
+Interactions:
+
+```text
+ThoughtLike
+ThoughtComment
+ThoughtShare
+ThoughtHide
+ThoughtReport
+ThoughtEvent
+```
+
+Do not create unnecessary tables until the actual interaction requires them.
+
+---
+
+# 6. Thought Indexing
+
+At minimum support:
+
+```text
+authorId
+createdAt
+status
+```
+
+For feed queries:
+
+```text
+(status, createdAt)
+```
+
+and appropriate author/interaction indexes.
+
+Feed performance should be considered from the beginning.
+
+---
+
+# 7. Notifications Model
+
+Create one notification model.
+
+Conceptually:
+
+```text
+Notification
+├── id
+├── recipientId
+├── type
+├── title
+├── body
+├── metadata
+├── readAt
+├── createdAt
+└── expiresAt
+```
+
+Add indexes for:
+
+```text
+recipientId + createdAt
+recipientId + readAt
+```
+
+---
+
+# PHASE 3 — Profile & Account Completion
+
+Now implement the profile behavior on top of the stabilized authentication foundation.
+
+---
+
+# 1. Onboarding
+
+Required:
+
+```text
+Display Name
+```
+
+Optional:
+
+```text
+Toli
+```
+
+The onboarding state should clearly distinguish:
+
+```text
+not completed
+completed without Toli
+completed with Toli
+```
+
+---
+
+# 2. Display Name Availability
+
+Frontend:
+
+```text
+user enters display name
+       ↓
+debounced availability check
+       ↓
+available / unavailable
+```
+
+Backend:
+
+```text
+validate
+normalize
+check
+database constraint
+```
+
+The database remains the final authority.
+
+---
+
+# 3. Profile API
+
+Ensure profile responses consistently return:
+
+```text
+displayName
+profilePicture
+toli
+characterConfig
+bio
+interests
+...
+```
+
+Do not expose OAuth provider display name as the UI identity.
+
+---
+
+# 4. Profile Picture API
+
+The frontend should be able to:
+
+```text
+GET current profile picture
+```
+
+and:
+
+```text
+PUT profile picture selection
+```
+
+Conceptually:
+
+```text
+type = PROVIDER
+```
+
+or:
+
+```text
+type = TOLI
+avatarKey = vector_03
+```
+
+The backend validates everything.
+
+---
+
+# 5. 3D Character API
+
+Keep the existing character configuration functionality.
+
+Do not merge it into profile-picture logic.
+
+The response should clearly separate:
+
+```text
+profilePicture
+```
+
+from:
+
+```text
+characterConfig
+```
+
+---
+
+# PHASE 4 — Toli Implementation
+
+This is the first major new feature.
+
+---
+
+# 1. Seed Tolies
+
+Seed:
+
+```text
+Vector
+Wave
+Quantum
+Orbit
+Flux
+```
+
+The seed must be idempotent.
+
+Running the seed multiple times must not create duplicates.
+
+---
+
+# 2. Toli API
+
+Recommended API responsibilities:
+
+```text
+GET /tolis
+GET /tolis/:id
+PUT /profile/toli
+```
+
+The exact routes should follow the project's existing controller conventions.
+
+## `GET /tolis`
+
+Returns the five predefined Tolies.
+
+Include:
+
+* id
+* name
+* description
+* motto
+* available avatars
+
+---
+
+# 3. Select Toli
+
+When selecting a Toli:
+
+```text
+validate Toli exists
+        ↓
+update profile.toliId
+        ↓
+validate avatar if Toli avatar active
+        ↓
+return updated profile
+```
+
+If no avatar has yet been selected, onboarding should guide the user to choose one.
+
+---
+
+# 4. Skip Toli
+
+Skipping means:
+
+```text
+toliId = null
+```
+
+No fake "No Toli" database entity is necessary.
+
+---
+
+# 5. Toli Chat Channels
+
+Create/seed the five Toli channels.
+
+Each channel maps to exactly one Toli.
+
+Do not create a separate messaging system.
+
+---
+
+# 6. Toli Chat Authorization
+
+Before allowing a user to join/send:
+
+```text
+user authenticated?
+       ↓
+has Toli?
+       ↓
+channel belongs to user's Toli?
+       ↓
+allowed
+```
+
+If:
+
+```text
+user.toli = Vector
+channel = Wave
+```
+
+reject the operation.
+
+This must be enforced in the backend.
+
+---
+
+# 7. Toli Change
+
+Changing:
+
+```text
+Vector → Wave
+```
+
+must update:
+
+```text
+profile.toliId
+```
+
+and validate the active Toli avatar.
+
+The user should then see:
+
+```text
+Wave Chat
+```
+
+instead of:
+
+```text
+Vector Chat
+```
+
+---
+
+# 8. Toli UI
+
+Add:
+
+```text
+Toli badge
+```
+
+to appropriate social surfaces.
+
+At minimum:
+
+* Profile
+* Chat
+* user cards where appropriate
+* onboarding
+* profile settings
+
+Do not turn Toli into a huge separate social platform.
+
+Launch 1 Toli is:
+
+```text
+identity
++
+avatar
++
+one chat room
+```
+
+---
+
+# PHASE 5 — Thoughts Implementation
+
+---
+
+# 1. Thought Creation
+
+Frontend:
+
+```text
+Thought composer
+```
+
+Backend:
+
+```text
+POST /thoughts
+```
+
+Validate:
+
+* authenticated user
+* body required
+* body length
+* whitespace
+* moderation
+* rate limit
+* account state
+
+Do not allow arbitrary HTML.
+
+Store plain text.
+
+---
+
+# 2. Thought Retrieval
+
+Implement:
+
+```text
+GET /thoughts/fresh
+GET /thoughts/for-you
+GET /thoughts/:id
+```
+
+Use cursor pagination rather than page-number pagination where possible.
+
+Avoid returning the entire feed repeatedly.
+
+---
+
+# 3. Fresh Feed
+
+Order primarily by:
+
+```text
+createdAt DESC
+```
+
+but still apply:
+
+* safety
+* moderation
+* hidden content
+* blocked users
+* deleted content
+
+---
+
+# 4. For You Feed
+
+Implement a scoring service.
+
+Conceptually:
+
+```text
+score =
+    freshness
+  + interestMatch
+  + toliMatch
+  + interactionQuality
+  + conversationQuality
+  + discovery
+  + diversity
+  - reports
+  - hides
+  - spam
+  - repetition
+```
+
+Keep weights configurable in code/config rather than scattering numbers throughout controllers.
+
+---
+
+# 5. Feed Diversity
+
+Do not allow:
+
+```text
+Rohan
+Rohan
+Rohan
+Rohan
+Rohan
+```
+
+to dominate the entire feed.
+
+Apply author diversity.
+
+Also diversify topics and Tolies when possible.
+
+---
+
+# 6. Thought Interactions
+
+Implement:
+
+```text
+Like / Unlike
+Comment
+Share
+Hide
+Report
+```
+
+Every interaction must verify:
+
+* user state
+* target exists
+* target is active
+* user is not blocked where applicable
+* rate limit
+* authorization
+
+---
+
+# 7. Thought Moderation
+
+Reuse existing moderation concepts.
+
+The current system already supports reports, blocks, moderation actions, banned words, and message moderation.
+
+Extend those concepts to Thoughts instead of creating a completely independent safety system.
+
+---
+
+# 8. Thought Events
+
+Record the events required for ranking:
+
+```text
+impression
+open
+like
+comment
+share
+hide
+report
+profile_open
+connection_request
+```
+
+Do not make event tracking so heavy that every feed impression becomes an expensive synchronous database operation.
+
+If needed, event recording can move to the worker.
+
+---
+
+# PHASE 6 — Notifications Implementation
+
+---
+
+# 1. Notification Service
+
+Create one central notification service.
+
+Example:
+
+```text
+NotificationService
+├── connectionRequest()
+├── connectionAccepted()
+├── newDm()
+└── legalNotice()
+```
+
+The notification service owns notification creation.
+
+Feature modules should not directly duplicate notification database logic.
+
+---
+
+# 2. Connection Request
+
+When request succeeds:
+
+```text
+ConnectionService
+      ↓
+NotificationService
+      ↓
+create notification
+```
+
+Only create the notification after the connection request is successfully persisted.
+
+---
+
+# 3. Connection Accepted
+
+Same pattern:
+
+```text
+accept connection
+      ↓
+persist status
+      ↓
+notification
+```
+
+---
+
+# 4. New DM
+
+When a new DM is successfully persisted:
+
+```text
+DM
+ ↓
+recipient notification
+```
+
+If the recipient is actively viewing the conversation, the frontend can avoid unnecessary UI noise while still maintaining notification state according to the chosen read/unread rules.
+
+---
+
+# 5. Legal Notice
+
+Admin/system functionality should create legal notices through the same notification system.
+
+Do not create a second "legal notification" storage mechanism.
+
+---
+
+# 6. Notification UI
+
+Add:
+
+```text
+notification icon
+notification list
+unread state
+mark read
+```
+
+Keep the UI simple for Launch 1.
+
+---
+
+# PHASE 7 — Worker Implementation
+
+---
+
+# 1. Worker Bootstrap
+
+Make the worker application a real independently running process.
+
+It must:
+
+* connect to Redis
+* load configuration
+* initialize queue consumers
+* handle graceful shutdown
+* log startup
+* log failures
+* retry jobs appropriately
+
+---
+
+# 2. Initial Job Types
+
+Start with only required jobs.
+
+Examples:
+
+```text
+NOTIFICATION_CREATE
+THOUGHT_EVENT_PROCESS
+SESSION_CLEANUP
+```
+
+Only add a job when asynchronous execution provides a real benefit.
+
+---
+
+# 3. Session Cleanup
+
+Expired/revoked sessions should eventually be cleaned.
+
+Example:
+
+```text
+every X hours
+      ↓
+find expired sessions
+      ↓
+delete/archive
+```
+
+Do not depend on application traffic to clean them.
+
+---
+
+# 4. Thought Event Processing
+
+If direct synchronous event writes become expensive:
+
+```text
+Thought API
+    ↓
+publish event
+    ↓
+Redis queue
+    ↓
+Worker
+    ↓
+persist event
+```
+
+The feed itself must never become unavailable just because an analytics/event job fails.
+
+---
+
+# 5. Retry Strategy
+
+Jobs need:
+
+* retry count
+* backoff
+* failure logging
+* dead-letter/failure handling
+
+Do not retry forever.
+
+---
+
+# 6. Graceful Shutdown
+
+API, realtime, and worker processes must all:
+
+```text
+stop accepting new work
+        ↓
+finish important work
+        ↓
+close Redis
+        ↓
+close DB
+        ↓
+exit
+```
+
+---
+
+# PHASE 8 — Existing Feature Integration
+
+After the new features exist, integrate them into the existing product.
+
+---
+
+# Authentication
+
+Verify:
+
+```text
+login
+OAuth
+refresh
+logout
+session expiration
+account ban
+account deletion
+```
+
+with the new profile/Toli/Thoughts/notification behavior.
+
+---
+
+# Profile
+
+Every UI surface must use:
+
+```text
+profile.displayName
+```
+
+and the resolved profile picture.
+
+Never use:
+
+```text
+oauth.displayName
+```
+
+as the visible identity.
+
+---
+
+# Public Chat
+
+Every chat message should return the correct:
+
+```text
+displayName
+profilePicture
+toli
+```
+
+The 3D character must not appear as the social avatar.
+
+---
+
+# Connections
+
+Connection cards should use:
+
+```text
+displayName
+profilePicture
+toli
+```
+
+---
+
+# DMs
+
+DM participant information should use the same profile representation.
+
+---
+
+# Thoughts
+
+Thought cards use:
+
+```text
+profilePicture
+displayName
+toli
+```
+
+not:
+
+```text
+characterConfig
+```
+
+---
+
+# Home
+
+Home can use:
+
+```text
+3D Character
+```
+
+and can expose:
+
+```text
+My Toli
+```
+
+when a Toli exists.
+
+---
+
+# PHASE 9 — Security & Testing
+
+This phase is mandatory.
+
+Do not deploy Launch 1 without it.
+
+---
+
+# 1. Authentication Tests
+
+Test:
+
+* invalid OAuth state
+* reused OAuth state
+* expired OAuth state
+* invalid refresh token
+* malformed refresh token
+* refresh-token race
+* revoked session
+* expired session
+* banned account
+* deleted account
+* invalid JWT
+* wrong JWT audience
+* wrong JWT issuer
+
+---
+
+# 2. Profile Tests
+
+Test:
+
+```text
+required display name
+duplicate display name
+case-insensitive duplicate
+display name update
+OAuth name cannot overwrite display name
+```
+
+---
+
+# 3. Avatar Tests
+
+Test:
+
+```text
+provider avatar sync
+Toli avatar selection
+invalid avatar key
+avatar belonging to another Toli
+provider login while Toli avatar is active
+Toli change with old Toli avatar
+```
+
+Critical rule:
+
+```text
+Toli avatar must never be replaced by provider avatar.
+```
+
+---
+
+# 4. Toli Tests
+
+Test:
+
+```text
+select Toli
+skip Toli
+select later
+change Toli
+only one Toli
+invalid Toli
+correct Toli chat access
+wrong Toli chat access rejected
+```
+
+Example:
+
+```text
+Vector user → Vector chat = allowed
+Vector user → Wave chat = rejected
+No-Toli user → Vector chat = rejected
+```
+
+---
+
+# 5. Thought Tests
+
+Test:
+
+* creation
+* validation
+* rate limiting
+* moderation
+* Fresh
+* For You
+* pagination
+* like/unlike
+* comments
+* share
+* hide
+* report
+* blocked users
+* deleted users
+* deleted thoughts
+* ranking diversity
+
+---
+
+# 6. Notification Tests
+
+Test only the approved types:
+
+```text
+connection request
+connection accepted
+new DM
+legal notice
+```
+
+Verify that excluded notification types do not accidentally get generated.
+
+---
+
+# 7. Worker Tests
+
+Test:
+
+* successful job
+* retry
+* failure
+* backoff
+* worker restart
+* Redis disconnect
+* graceful shutdown
+* duplicate job handling where required
+
+---
+
+# PHASE 10 — Frontend Stabilization
+
+---
+
+# 1. Authentication State
+
+Verify:
+
+```text
+login
+refresh
+OAuth callback
+logout
+expired session
+reconnect
+```
+
+Do not allow duplicate refresh requests.
+
+---
+
+# 2. RTK Query
+
+Review cache behavior after:
+
+* profile update
+* Toli change
+* avatar change
+* connection request
+* notification read
+* Thought creation
+* Thought interaction
+
+Use tag invalidation deliberately.
+
+Do not blindly invalidate entire API caches.
+
+---
+
+# 3. Socket State
+
+Verify:
+
+```text
+access token refresh
+socket reconnect
+room join
+room leave
+Toli change
+logout
+```
+
+A user must not remain connected to the old Toli room after changing Toli.
+
+---
+
+# 4. UI Identity Audit
+
+Search the entire frontend for places displaying:
+
+```text
+providerDisplayName
+Google name
+Facebook name
+```
+
+Replace inappropriate usage with:
+
+```text
+profile.displayName
+```
+
+Perform the same audit for avatar usage.
+
+---
+
+# PHASE 11 — Production Infrastructure
+
+---
+
+# 1. Production Processes
+
+Keep the existing three-process architecture:
+
+```text
+API
+Realtime
+Worker
+```
+
+Do not merge everything into one process simply for convenience.
+
+---
+
+# 2. Production Routing
+
+Recommended:
+
+```text
+api.hirotoli.com
+      ↓
+API
+
+realtime.hirotoli.com
+      ↓
+Realtime
+
+frontend domain
+      ↓
+Frontend
+```
+
+Nginx can act as the reverse proxy.
+
+---
+
+# 3. Database
+
+Use the production Neon PostgreSQL configuration.
+
+Backend deployment should be geographically close to the database where practical.
+
+Avoid unnecessary database round trips.
+
+Use the pooled connection string correctly.
+
+Do not introduce an artificial:
+
+```text
+connection_limit=1
+```
+
+configuration.
+
+---
+
+# 4. Redis
+
+Redis must support:
+
+* realtime adapter
+* rate limiting
+* queues
+* OAuth state
+* other short-lived data
+
+Keep responsibilities logically separated.
+
+---
+
+# 5. Environment Configuration
+
+Production secrets must not be committed.
+
+Required configuration should fail startup when missing rather than silently using unsafe defaults.
+
+---
+
+# 6. HTTPS
+
+Production must use HTTPS.
+
+Cookies:
+
+```text
+HttpOnly
+Secure
+appropriate SameSite
+```
+
+must be correctly configured.
+
+---
+
+# 7. Reverse Proxy
+
+Nginx should correctly handle:
+
+* API proxying
+* WebSocket upgrade
+* HTTPS
+* forwarding headers
+* timeouts
+* request size limits
+* health endpoints
+
+---
+
+# PHASE 12 — Observability
+
+Before load testing, add basic observability.
+
+Track:
+
+```text
+HTTP request latency
+HTTP error rate
+DB latency
+Redis latency
+Socket connections
+Socket reconnects
+worker jobs
+worker failures
+queue depth
+notification failures
+Thought feed latency
+```
+
+Log enough context to diagnose failures without logging sensitive credentials/tokens.
+
+---
+
+# PHASE 13 — Load Testing
+
+The existing production-readiness goal includes a 5,000-socket load test.
+
+Do not jump directly to 5,000.
+
+Test progressively:
+
+```text
+100
+ ↓
+500
+ ↓
+1,000
+ ↓
+2,500
+ ↓
+5,000
+```
+
+Test:
+
+* public chat
+* Toli chat
+* DM connections
+* reconnects
+* authentication
+* Redis adapter
+* database load
+* notification processing
+
+Measure:
+
+```text
+CPU
+RAM
+Redis
+PostgreSQL
+API latency
+Socket latency
+error rate
+reconnect rate
+worker queue depth
+```
+
+---
+
+# PHASE 14 — Final Production Security Review
+
+Before Launch 1:
+
+## Authentication
+
+* OAuth state
+* token validation
+* refresh rotation
+* cookie security
+* JWT issuer/audience
+* logout
+* session revocation
+
+## Authorization
+
+* Toli chat access
+* DM membership
+* connection requirements
+* moderation endpoints
+* notification ownership
+* Thought ownership
+* admin endpoints
+
+## Input validation
+
+* display names
+* Thought text
+* comments
+* chat messages
+* Toli selection
+* avatar selection
+
+## Abuse protection
+
+* rate limits
+* spam
+* banned words
+* reports
+* blocks
+* account restrictions
+
+---
+
+# 20. Important Existing-Code Changes
+
+The following existing areas should be treated as changes/fixes rather than new features.
+
+## Authentication
+
+### Fix
+
+* OAuth state
+* refresh race
+* malformed refresh handling
+* duplicate refresh
+* provider profile synchronization
+* JWT validation
+* token transport
+* socket token refresh
+* throttling
+* issuer/audience
+
+---
+
+# Profile
+
+### Fix
+
+* display name becomes the only visible user identity
+* enforce uniqueness
+* case-insensitive uniqueness
+* OAuth name cannot overwrite display name
+* provider avatar synchronization
+* separate profile picture from 3D character
+
+---
+
+# 3D Character
+
+### Preserve
+
+Do not remove or demote:
+
+```text
+characterConfig
+```
+
+It remains a Launch 1 feature.
+
+---
+
+# Public Chat
+
+### Change
+
+* add Toli channels
+* enforce Toli membership
+* display profile picture
+* display HiRotoli display name
+* display Toli
+* preserve existing moderation/rate limiting
+* preserve cursor pagination
+* verify socket authorization
+
+---
+
+# Connections
+
+### Change
+
+Connection events trigger notifications.
+
+Do not rebuild the existing connection architecture.
+
+---
+
+# DMs
+
+### Change
+
+Successful new DM messages trigger notifications.
+
+Keep existing:
+
+* membership checks
+* connection requirement
+* block checks
+* rate limiting
+* realtime architecture
+
+The current data model already separates conversations, members, and direct messages.
+
+---
+
+# Moderation
+
+### Change
+
+Extend existing moderation to Thoughts.
+
+Do not create a second moderation framework.
+
+---
+
+# Settings
+
+### Change
+
+Add settings for:
+
+* profile picture selection
+* Toli selection/change
+* notifications if required by the final UI
+
+Do not add unnecessary notification controls because Launch 1 notification types are intentionally limited.
+
+---
+
+# Home & Navigation
+
+### Change
+
+Add:
+
+```text
+Thoughts
+Notifications
+My Toli
+```
+
+where appropriate.
+
+Keep Home focused on the 3D character/personal world.
+
+---
+
+# 21. Recommended Implementation Order
+
+The actual coding sequence should be:
+
+```text
+1. Baseline current repository
+        ↓
+2. Critical authentication/security fixes
+        ↓
+3. Profile identity rules
+        ↓
+4. Database migrations
+        ↓
+5. Toli seed + Toli backend
+        ↓
+6. Toli avatar system
+        ↓
+7. Toli chat integration
+        ↓
+8. Toli onboarding/profile UI
+        ↓
+9. Thoughts database
+        ↓
+10. Thought creation
+        ↓
+11. Fresh feed
+        ↓
+12. Thought interactions
+        ↓
+13. For You ranking
+        ↓
+14. Thought moderation
+        ↓
+15. Notification infrastructure
+        ↓
+16. Connection notifications
+        ↓
+17. DM notifications
+        ↓
+18. Legal notifications
+        ↓
+19. Worker implementation
+        ↓
+20. Cross-feature integration
+        ↓
+21. Automated testing
+        ↓
+22. Security audit
+        ↓
+23. Production infrastructure
+        ↓
+24. Load testing
+        ↓
+25. Final stabilization
+        ↓
+26. Launch
+```
+
+---
+
+# 22. Definition of Done
+
+Launch 1 is not complete simply because all screens exist.
+
+It is complete when:
+
+## Authentication
+
+```text
+OAuth works
+refresh works
+logout works
+sessions are secure
+provider data sync works
+user identity is stable
+```
+
+## Profile
+
+```text
+Display Name is required
+Display Name is unique
+OAuth name cannot overwrite it
+provider avatar sync works
+Toli avatar works
+3D character remains separate
+```
+
+## Toli
+
+```text
+5 Tolies exist
+selection works
+skip works
+one Toli per user
+avatar selection works
+Toli changes work
+Toli chat works
+wrong Toli chat access is rejected
+```
+
+## Thoughts
+
+```text
+create works
+Fresh works
+For You works
+pagination works
+interactions work
+moderation works
+ranking is deterministic
+```
+
+## Notifications
+
+```text
+connection request works
+connection accepted works
+new DM notification works
+legal notices work
+excluded notification types are not generated
+```
+
+## Worker
+
+```text
+worker starts
+jobs process
+jobs retry
+failures are visible
+shutdown is graceful
+cleanup works
+```
+
+## Production
+
+```text
+HTTPS works
+API works
+Realtime works
+Worker works
+Redis works
+PostgreSQL works
+WebSockets work
+monitoring exists
+load test passes
+```
+
+---
+
+# 23. Rules for Implementation
+
+These rules should be followed throughout development.
+
+## Rule 1 — Do not rewrite working systems unnecessarily
+
+If the existing connection, DM, moderation, or channel architecture is sound, extend it.
+
+Do not rebuild it just because a new feature is being added.
+
+---
+
+## Rule 2 — Backend is the authority
+
+Frontend validation improves UX.
+
+It does not provide security.
+
+The backend must validate:
+
+* Toli
+* avatar
+* display name
+* Thought permissions
+* chat access
+* notifications
+* moderation
+* ownership
+
+---
+
+## Rule 3 — Reuse infrastructure
+
+Prefer:
+
+```text
+existing Channel
+existing ChannelMessage
+existing Socket.IO
+existing Redis adapter
+existing moderation
+existing rate limiting
+existing connection system
+existing DM system
+```
+
+instead of creating parallel systems.
+
+---
+
+## Rule 4 — Keep new systems modular
+
+Thought ranking should be separate from the Thought controller.
+
+Notification creation should be centralized.
+
+Worker jobs should have clear handlers.
+
+Toli should not contain chat implementation.
+
+Profile should not contain OAuth implementation.
+
+---
+
+## Rule 5 — Database constraints matter
+
+Anything that must always be true should be enforced as close to the database as practical.
+
+Examples:
+
+```text
+unique display name
+unique OAuth identity
+one profile per user
+one Toli per profile
+unique connection pair
+unique interaction where applicable
+```
+
+## The existing schema already uses database constraints for several important relationships, such as unique provider identity and connection pairs.
+
+## Rule 6 — Do not add future features accidentally
+
+Launch 1 does NOT include:
+
+* custom profile image upload
+* profile-image processing workers
+* Toli competitions
+* Toli rankings
+* Toli events
+* Toli roles
+* Toli invitations
+* Thought media
+* ML recommendation models
+* Thought-like notifications
+* Thought-comment notifications
+* offline user invite notifications
+* marketing notifications
+
+These can be future work.
+
+---
+
+# 24. Final Architecture
+
+The final Launch 1 architecture should conceptually look like:
+
+```text
+                         ┌──────────────────┐
+                         │    React/Vite    │
+                         │    Frontend      │
+                         └────────┬─────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+                    ▼                           ▼
+             ┌─────────────┐             ┌─────────────┐
+             │     API     │             │  Realtime   │
+             │   NestJS    │             │  NestJS     │
+             └──────┬──────┘             └──────┬──────┘
+                    │                           │
+                    │                           │
+          ┌─────────┼───────────┐       ┌───────┴───────┐
+          │         │           │       │               │
+          ▼         ▼           ▼       ▼               ▼
+       Prisma    Redis       Services  Socket.IO      Redis
+          │         │
+          │         │
+          ▼         ▼
+     PostgreSQL   Queue
+                    │
+                    ▼
+             ┌─────────────┐
+             │   Worker    │
+             │   NestJS    │
+             └─────────────┘
+```
+
+Feature layer:
+
+```text
+                    HiRotoli
+                       │
+       ┌───────────────┼────────────────┐
+       │               │                │
+       ▼               ▼                ▼
+    Identity         Social           Realtime
+       │               │                │
+       ├─ Auth         ├─ Toli           ├─ Public Chat
+       ├─ Profile      ├─ Thoughts       ├─ Toli Chat
+       ├─ Avatar       ├─ Connections    └─ DMs
+       └─ Character    └─ Notifications
+```
+
+Safety layer:
+
+```text
+Authentication
+Authorization
+Rate Limiting
+Moderation
+Blocks
+Reports
+Banned Words
+Audit Logs
+```
+
+applies across the relevant features.
+
+---
+
+# 25. Final Principle
+
+The goal is not:
+
+> "Build five new features."
+
+The goal is:
+
+> **Turn the existing HiRotoli codebase into one coherent Launch 1 product without breaking the systems that already work.**
+
+Therefore the implementation strategy is:
+
+```text
+STABILIZE
+   ↓
+PREPARE
+   ↓
+IMPLEMENT
+   ↓
+INTEGRATE
+   ↓
+TEST
+   ↓
+SECURE
+   ↓
+LOAD TEST
+   ↓
+DEPLOY
+```
+
+Every phase should finish with its own verification before the next dependent phase begins.
+
+This prevents a situation where Toli, Thoughts, Notifications, authentication, sockets, and the worker are all changed simultaneously and failures become difficult to isolate.
+
+# Launch 1 Completion Target
+
+At the end of the roadmap, a user should be able to:
+
+```text
+Sign up / OAuth login
+        ↓
+Create required profile
+        ↓
+Choose or skip Toli
+        ↓
+Choose profile picture
+        ↓
+Configure 3D character
+        ↓
+Enter HiRotoli
+        ↓
+Use public chat
+        ↓
+Enter their Toli chat if selected
+        ↓
+Find/connect with people
+        ↓
+DM connections
+        ↓
+Receive connection/DM notifications
+        ↓
+Read Thoughts
+        ↓
+Create Thoughts
+        ↓
+Interact safely
+        ↓
+Use the complete product in production
+```
+
+while the backend maintains:
+
+```text
+secure authentication
+correct authorization
+safe moderation
+reliable realtime connections
+background workers
+database consistency
+notification delivery
+observability
+and production scalability.
+```

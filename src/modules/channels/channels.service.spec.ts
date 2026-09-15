@@ -14,6 +14,9 @@ describe('ChannelsService', () => {
     const channelMessage = {
       findMany: jest.fn(),
     };
+    const profile = {
+      findUnique: jest.fn(),
+    };
     const redisConnection = {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue('OK'),
@@ -22,6 +25,7 @@ describe('ChannelsService', () => {
     const prisma = {
       channel,
       channelMessage,
+      profile,
     } as unknown as PrismaService;
     const config = {
       get: jest.fn().mockReturnValue('http://localhost:3000'),
@@ -37,6 +41,7 @@ describe('ChannelsService', () => {
       service: new ChannelsService(prisma, config, redis, moderation),
       channel,
       channelMessage,
+      profile,
       redisConnection,
       moderation,
     };
@@ -53,6 +58,7 @@ describe('ChannelsService', () => {
       where: {
         isActive: true,
         visibility: 'public',
+        type: { not: 'toli' },
       },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
@@ -125,7 +131,15 @@ describe('ChannelsService', () => {
               id: 'user-2',
               profile: {
                 username: 'two',
+                displayName: 'Unknown',
+                avatarUrl: null,
                 profileUrl: 'http://localhost:3000/profiles/two',
+                profilePicture: {
+                  type: 'provider',
+                  avatarUrl: null,
+                  toliAvatarKey: null,
+                },
+                toli: null,
               },
             },
           },
@@ -143,16 +157,67 @@ describe('ChannelsService', () => {
           sender: {
             select: {
               id: true,
+              publicUserId: true,
               profile: {
                 select: {
                   username: true,
                   displayName: true,
                   avatarUrl: true,
+                  profilePictureType: true,
+                  toliAvatarKey: true,
+                  toli: { select: { id: true, name: true } },
                 },
               },
             },
           },
         },
+      }),
+    );
+  });
+
+  it('returns the unified identity card on channel messages', async () => {
+    const { service, channel, channelMessage } = createService();
+    channel.findFirst.mockResolvedValue({
+      id: 'channel-id',
+      slug: 'general',
+    });
+    channelMessage.findMany.mockResolvedValue([
+      {
+        id: 'message-1',
+        createdAt: new Date('2026-05-16T06:01:00.000Z'),
+        sender: {
+          id: 'user-1',
+          publicUserId: 'HT-7K4M9Q2X',
+          profile: {
+            username: 'one',
+            displayName: 'One',
+            avatarUrl: null,
+            profilePictureType: 'toli',
+            toliAvatarKey: 'vector_01',
+            toli: { id: 'toli-id', name: 'Vector' },
+          },
+        },
+      },
+    ]);
+
+    await expect(service.getMessages('general', undefined, '1')).resolves.toEqual(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({
+            sender: expect.objectContaining({
+              publicUserId: 'HT-7K4M9Q2X',
+              profile: expect.objectContaining({
+                displayName: 'One',
+                avatarUrl: null,
+                profilePicture: expect.objectContaining({
+                  type: 'toli',
+                  toliAvatarKey: 'vector_01',
+                }),
+                toli: { id: 'toli-id', name: 'Vector' },
+              }),
+            }),
+          }),
+        ],
       }),
     );
   });
@@ -167,5 +232,59 @@ describe('ChannelsService', () => {
     await expect(service.getMessages('general', 'not-a-date')).rejects.toThrow(
       BadRequestException,
     );
+  });
+
+  it('requires a Toli before resolving the personal Toli room', async () => {
+    const { service, profile } = createService();
+    profile.findUnique.mockResolvedValue({ toliId: null });
+
+    await expect(service.getMyToliChannel('user-1')).rejects.toThrow(
+      'TOLI_REQUIRED',
+    );
+  });
+
+  it('resolves the personal Toli room for members', async () => {
+    const { service, channel, profile } = createService();
+    profile.findUnique.mockResolvedValue({ toliId: 'vector-id' });
+    channel.findFirst.mockResolvedValue({
+      id: 'toli-channel-1',
+      slug: 'toli-vector',
+      toliId: 'vector-id',
+    });
+
+    await expect(service.getMyToliChannel('user-1')).resolves.toEqual(
+      expect.objectContaining({ id: 'toli-channel-1' }),
+    );
+    expect(channel.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { toliId: 'vector-id', isActive: true } }),
+    );
+  });
+
+  it('checks Toli room access without leaking other rooms', async () => {
+    const { service, profile } = createService();
+
+    await expect(
+      service.hasToliChannelAccess(undefined, { toliId: 'vector-id' }),
+    ).resolves.toBe(false);
+    await expect(
+      service.hasToliChannelAccess('user-1', { toliId: null }),
+    ).resolves.toBe(true);
+
+    profile.findUnique.mockResolvedValue({ toliId: 'vector-id' });
+    await expect(
+      service.hasToliChannelAccess('user-1', { toliId: 'vector-id' }),
+    ).resolves.toBe(true);
+
+    profile.findUnique.mockResolvedValue({ toliId: 'wave-id' });
+    await expect(
+      service.hasToliChannelAccess('user-1', { toliId: 'vector-id' }),
+    ).resolves.toBe(false);
+  });
+
+  it('ignores non-UUID values for Toli channel lookup', async () => {
+    const { service, channel } = createService();
+
+    await expect(service.getToliChannelById('general')).resolves.toBeNull();
+    expect(channel.findFirst).not.toHaveBeenCalled();
   });
 });

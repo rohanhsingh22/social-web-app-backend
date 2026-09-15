@@ -14,7 +14,10 @@ import {
 } from "@prisma/client";
 import { RateLimitService } from "@app/common/rate-limit.service";
 import { normalizePublicUserId } from "@app/common/public-user-id";
+import { profileCardSelect } from "@app/common/profile-card";
 import { PrismaService } from "@app/core/prisma/prisma.service";
+import { NotificationsService } from "@app/modules/notifications/notifications.service";
+import { ThoughtsService } from "@app/modules/thoughts/thoughts.service";
 
 const CONNECTION_REQUEST_DAILY_LIMIT = 30;
 const DAY_SECONDS = 24 * 60 * 60;
@@ -49,6 +52,8 @@ export class ConnectionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly rateLimit: RateLimitService,
+    private readonly notifications: NotificationsService,
+    private readonly thoughts: ThoughtsService,
   ) {}
 
   async list(userId: string) {
@@ -182,11 +187,22 @@ export class ConnectionsService {
     this.logger.log(
       `Connection request ${request.id} created by ${requesterId}`,
     );
+
+    const requesterName = await this.displayNameOf(requesterId);
+    await this.notifications.connectionRequest(receiverId, {
+      requesterId,
+      requesterName,
+      connectionId: request.id,
+    });
+    await this.thoughts.recordEvent(requesterId, 'connection_request', undefined, {
+      targetUserId: receiverId,
+    });
+
     return this.mapConnection(request, requesterId);
   }
 
   async accept(userId: string, connectionId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const connection = await this.getPendingForReceiver(
         tx,
         connectionId,
@@ -224,6 +240,18 @@ export class ConnectionsService {
         conversation,
       };
     });
+
+    const userName = await this.displayNameOf(userId);
+    await this.notifications.connectionAccepted(
+      result.connection.requesterId,
+      {
+        userId,
+        userName,
+        conversationId: result.conversation.id,
+      },
+    );
+
+    return result;
   }
 
   async reject(userId: string, connectionId: string) {
@@ -392,6 +420,15 @@ export class ConnectionsService {
     return { userLowId, userHighId };
   }
 
+  private async displayNameOf(userId: string): Promise<string> {
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { displayName: true },
+    });
+
+    return profile?.displayName ?? 'Someone';
+  }
+
   private connectionInclude() {
     return {
       requester: {
@@ -414,9 +451,7 @@ export class ConnectionsService {
   private publicProfileSelect() {
     return {
       userId: true,
-      username: true,
-      displayName: true,
-      avatarUrl: true,
+      ...profileCardSelect,
       bio: true,
       ageGroup: true,
       region: true,

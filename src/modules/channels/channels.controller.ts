@@ -1,11 +1,16 @@
-import { Controller, Get, Header, Param, Query } from '@nestjs/common';
+import { Controller, Get, Header, Param, Query, UseGuards } from '@nestjs/common';
 import { envelope } from '@app/common/api-response';
+import { AuthGuard } from '@app/modules/auth/auth.guard';
+import { AuthenticatedUser } from '@app/modules/auth/auth.types';
+import { CurrentUser } from '@app/modules/auth/current-user.decorator';
 import { ChannelsService } from './channels.service';
 
 const CHANNEL_CACHE_CONTROL =
   'public, max-age=10, stale-while-revalidate=30';
 const MESSAGE_CACHE_CONTROL =
   'public, max-age=1, stale-while-revalidate=5';
+const TOLI_MESSAGE_CACHE_CONTROL =
+  'private, max-age=1, stale-while-revalidate=5';
 
 @Controller('channels')
 export class ChannelsController {
@@ -25,6 +30,27 @@ export class ChannelsController {
     return envelope({
       channel: await this.channelsService.getDefaultChannel(),
     });
+  }
+
+  @Get('toli/mine')
+  @UseGuards(AuthGuard)
+  async myToliChannel(@CurrentUser() user: AuthenticatedUser) {
+    return envelope({
+      channel: await this.channelsService.getMyToliChannel(user.id),
+    });
+  }
+
+  @Get('toli/mine/messages')
+  @UseGuards(AuthGuard)
+  @Header('Cache-Control', TOLI_MESSAGE_CACHE_CONTROL)
+  async myToliMessages(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit = '50',
+  ) {
+    return envelope(
+      await this.channelsService.getToliMessages(user.id, cursor, limit),
+    );
   }
 
   @Get(':slug')

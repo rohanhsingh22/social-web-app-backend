@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConnectionStatus, Prisma, UserStatus } from '@prisma/client';
 import { normalizePublicUserId } from '@app/common/public-user-id';
+import { profileCardSelect } from '@app/common/profile-card';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 
 type BlockWithUser = Prisma.BlockGetPayload<{
@@ -144,9 +145,7 @@ export class BlocksService {
   private publicProfileSelect() {
     return {
       userId: true,
-      username: true,
-      displayName: true,
-      avatarUrl: true,
+      ...profileCardSelect,
       bio: true,
       ageGroup: true,
       region: true,

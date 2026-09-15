@@ -19,6 +19,7 @@ import { AdminGuard } from './admin.guard';
 import { AdminActionDto } from './dto/admin-action.dto';
 import { CreateBannedWordDto, UpdateBannedWordDto } from './dto/banned-word.dto';
 import { CreateChannelDto, UpdateChannelDto } from './dto/channel-admin.dto';
+import { LegalNoticeDto } from './dto/legal-notice.dto';
 import { ReportStatusDto } from './dto/report-status.dto';
 
 @Controller('admin')
@@ -148,6 +149,16 @@ export class AdminController {
   ) {
     return envelope({
       bannedWord: await this.adminService.createBannedWord(admin.id, body),
+    });
+  }
+
+  @Post('legal-notices')
+  async sendLegalNotice(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Body() body: LegalNoticeDto,
+  ) {
+    return envelope({
+      notification: await this.adminService.sendLegalNotice(admin.id, body),
     });
   }
 

@@ -2,15 +2,14 @@ import { Injectable } from "@nestjs/common";
 import { ConnectionStatus, UserStatus } from "@prisma/client";
 import { RateLimitService } from "@app/common/rate-limit.service";
 import { normalizePublicUserId } from "@app/common/public-user-id";
+import { profileCardSelect } from "@app/common/profile-card";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 
 const SEARCH_RATE_LIMIT = 60;
 const SEARCH_WINDOW_SECONDS = 60;
 
 const publicProfileSelect = {
-  username: true,
-  displayName: true,
-  avatarUrl: true,
+  ...profileCardSelect,
   bio: true,
   ageGroup: true,
   region: true,

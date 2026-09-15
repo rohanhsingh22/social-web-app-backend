@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { BullModule } from '@nestjs/bullmq';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { appConfig } from '@app/config/app.config';
 import { CoreModule } from '@app/core/core.module';
 import { RealtimeAuthModule } from '@app/realtime/realtime-auth/realtime-auth.module';
@@ -14,6 +15,17 @@ import { RealtimeRateLimitModule } from '@app/realtime/realtime-rate-limit/realt
       isGlobal: true,
       load: [appConfig],
       cache: true,
+    }),
+    // Shared Bull config for queues registered by imported feature modules
+    // (e.g. notifications via DirectMessagesModule). Without this, those
+    // queues silently fall back to localhost:6379.
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          url: config.getOrThrow<string>('redis.url'),
+        },
+      }),
     }),
     CoreModule,
     RealtimeAuthModule,
