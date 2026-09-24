@@ -229,6 +229,8 @@ describe('ThoughtsService', () => {
     thought.findMany.mockResolvedValue([thoughtRow()]);
 
     await service.listFresh('user-1', undefined, '20');
+    // Impressions are enqueued fire-and-forget; flush background microtasks.
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(eventsQueue.add).toHaveBeenCalledWith(
       'THOUGHT_EVENT_PROCESS',
@@ -260,6 +262,9 @@ describe('ThoughtsService', () => {
     thought.findMany.mockResolvedValue([thoughtRow()]);
 
     await service.listFresh('user-1', undefined, '20');
+    // Flush fire-and-forget fallback path (queue reject -> createMany).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(thoughtEvent.createMany).toHaveBeenCalledWith(
       expect.objectContaining({

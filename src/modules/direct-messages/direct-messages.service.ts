@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import {
@@ -51,6 +52,8 @@ type DirectMessageWithSender = Prisma.DirectMessageGetPayload<{
 
 @Injectable()
 export class DirectMessagesService {
+  private readonly logger = new Logger(DirectMessagesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly moderation: ModerationService,
@@ -58,6 +61,7 @@ export class DirectMessagesService {
   ) {}
 
   async listConversations(userId: string) {
+    const start = Date.now();
     const memberships = await this.prisma.conversationMember.findMany({
       where: { userId },
       orderBy: { conversation: { updatedAt: "desc" } },
@@ -92,6 +96,10 @@ export class DirectMessagesService {
       },
     });
 
+    this.logger.debug(
+      `dm.listConversations user=${userId} count=${memberships.length} ${(Date.now() - start).toFixed(1)}ms`,
+    );
+
     return memberships.map((membership) => ({
       ...this.mapConversation(membership.conversation, userId),
       latestMessage: membership.conversation.messages[0]
@@ -106,42 +114,58 @@ export class DirectMessagesService {
     cursor?: string,
     limitValue?: string,
   ) {
+    const totalStart = Date.now();
+    const convStart = Date.now();
     const conversation = await this.getConversationForUser(
       userId,
       conversationId,
     );
-    await this.assertDirectConversationAccess(conversation, userId);
+    const convMs = Date.now() - convStart;
 
     const limit = this.parseLimit(limitValue);
-    const messages = await this.prisma.directMessage.findMany({
-      where: {
-        conversationId,
-        status: MessageStatus.active,
-        ...(cursor
-          ? {
-              createdAt: {
-                lt: this.parseCursor(cursor),
-              },
-            }
-          : {}),
-      },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: limit + 1,
-      include: {
-        sender: {
-          select: {
-            id: true,
-            profile: { select: this.senderProfileSelect() },
+    // Access checks (user/block/connection) and the message page are
+    // independent once the conversation members are known: run them
+    // concurrently to save one sequential DB round trip. If the access
+    // check rejects, the messages result is discarded and the error
+    // propagates, so authorization is not weakened.
+    const restStart = Date.now();
+    const [messages] = await Promise.all([
+      this.prisma.directMessage.findMany({
+        where: {
+          conversationId,
+          status: MessageStatus.active,
+          ...(cursor
+            ? {
+                createdAt: {
+                  lt: this.parseCursor(cursor),
+                },
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        include: {
+          sender: {
+            select: {
+              id: true,
+              profile: { select: this.senderProfileSelect() },
+            },
           },
         },
-      },
-    });
+      }),
+      this.assertDirectConversationAccess(conversation, userId),
+    ]);
+    const restMs = Date.now() - restStart;
 
     const hasMore = messages.length > limit;
     const page = hasMore ? messages.slice(0, limit) : messages;
     const nextCursor = hasMore
       ? page[page.length - 1]?.createdAt.toISOString()
       : null;
+
+    this.logger.debug(
+      `dm.getMessages conv=${conversationId} total=${(Date.now() - totalStart).toFixed(1)}ms convLoad=${convMs.toFixed(1)}ms checks+messages=${restMs.toFixed(1)}ms count=${page.length}`,
+    );
 
     return {
       conversation: this.mapConversation(conversation, userId),
@@ -270,6 +294,7 @@ export class DirectMessagesService {
       throw new ForbiddenException("CONVERSATION_ACCESS_DENIED");
     }
 
+    const checksStart = Date.now();
     const [senderUser, block, connection] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
@@ -291,6 +316,9 @@ export class DirectMessagesService {
         select: { id: true, status: true },
       }),
     ]);
+    this.logger.debug(
+      `dm.accessChecks user=${userId} ${(Date.now() - checksStart).toFixed(1)}ms`,
+    );
 
     if (!senderUser || senderUser.status === UserStatus.banned) {
       throw new ForbiddenException("USER_BANNED");

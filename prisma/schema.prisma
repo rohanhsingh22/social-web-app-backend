@@ -257,6 +257,9 @@ model Connection {
   @@index([requesterId])
   @@index([receiverId])
   @@index([status])
+  @@index([receiverId, status, createdAt(sort: Desc)])
+  @@index([requesterId, status, createdAt(sort: Desc)])
+  @@index([status, updatedAt(sort: Desc)])
   @@map("connections")
 }
 
@@ -279,6 +282,7 @@ model ConversationMember {
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, userId])
+  @@index([userId])
   @@map("conversation_members")
 }
 
@@ -328,6 +332,7 @@ model ThoughtLike {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([thoughtId, userId])
+  @@index([userId, thoughtId])
   @@map("thought_likes")
 }
 
@@ -356,6 +361,7 @@ model ThoughtShare {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([thoughtId, userId])
+  @@index([userId, thoughtId])
   @@map("thought_shares")
 }
 
@@ -367,6 +373,7 @@ model ThoughtHide {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([thoughtId, userId])
+  @@index([userId, thoughtId])
   @@map("thought_hides")
 }
 
@@ -385,6 +392,7 @@ model ThoughtReport {
 
   @@index([thoughtId])
   @@index([status])
+  @@index([reporterId])
   @@map("thought_reports")
 }
 
@@ -437,6 +445,7 @@ model Block {
   blockedUser   User     @relation("BlockBlocked", fields: [blockedUserId], references: [id], onDelete: Cascade)
 
   @@unique([blockerId, blockedUserId])
+  @@index([blockedUserId])
   @@map("blocks")
 }
 

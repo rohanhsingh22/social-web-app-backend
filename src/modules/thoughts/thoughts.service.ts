@@ -16,6 +16,7 @@ import {
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { ModerationService } from '@app/modules/moderation/moderation.service';
 import { AuthenticatedUser } from '@app/modules/auth/auth.types';
+import { perfNow, perfElapsedMs, formatPerfMs } from '@app/common/perf';
 import { ThoughtsRankingService } from './thoughts-ranking.service';
 import { ReportThoughtDto } from './dto/report-thought.dto';
 
@@ -157,10 +158,14 @@ export class ThoughtsService {
   }
 
   async listFresh(viewerId: string, cursor?: string, limitValue?: string) {
+    const totalStart = perfNow();
     const limit = this.parseLimit(limitValue);
     const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+    const exclusionsStart = perfNow();
     const exclusions = await this.feedExclusions(viewerId);
+    const exclusionsMs = perfElapsedMs(exclusionsStart);
 
+    const poolStart = perfNow();
     const thoughts = await this.prisma.thought.findMany({
       where: {
         status: MessageStatus.active,
@@ -174,25 +179,38 @@ export class ThoughtsService {
         _count: { select: thoughtCountsSelect },
       },
     });
+    const poolMs = perfElapsedMs(poolStart);
 
-    return this.toFeedPage(
+    const result = await this.toFeedPage(
       viewerId,
       thoughts,
       limit,
       thoughts.length > limit,
       thoughts.length > limit ? this.oldestCursor(thoughts.slice(0, limit)) : null,
     );
+    this.logger.debug(
+      `listFresh viewer=${viewerId} total=${formatPerfMs(perfElapsedMs(totalStart))} exclusions=${formatPerfMs(exclusionsMs)} pool=${formatPerfMs(poolMs)}`,
+    );
+    return result;
   }
 
   async listForYou(viewerId: string, cursor?: string, limitValue?: string) {
+    const totalStart = perfNow();
     const limit = this.parseLimit(limitValue);
     const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
-    const exclusions = await this.feedExclusions(viewerId);
-    const viewer = await this.prisma.profile.findUnique({
-      where: { userId: viewerId },
-      select: { interests: true, toliId: true },
-    });
+    // exclusions (blocks/hides/reports) and viewer profile are independent:
+    // run concurrently to save one sequential DB round trip.
+    const preStart = perfNow();
+    const [exclusions, viewer] = await Promise.all([
+      this.feedExclusions(viewerId),
+      this.prisma.profile.findUnique({
+        where: { userId: viewerId },
+        select: { interests: true, toliId: true },
+      }),
+    ]);
+    const preMs = perfElapsedMs(preStart);
 
+    const poolStart = perfNow();
     const pool = await this.prisma.thought.findMany({
       where: {
         status: MessageStatus.active,
@@ -206,7 +224,9 @@ export class ThoughtsService {
         _count: { select: thoughtCountsSelect },
       },
     });
+    const poolMs = perfElapsedMs(poolStart);
 
+    const rankStart = perfNow();
     const ranked = this.ranking.rank(
       pool.map((thought) => ({
         ...thought,
@@ -221,18 +241,23 @@ export class ThoughtsService {
         toliId: viewer?.toliId ?? null,
       },
     );
+    const rankMs = perfElapsedMs(rankStart);
 
     const picked = this.ranking.applyAuthorDiversity(ranked, limit);
     const page = picked.map((item) => item.thought);
     const hasMore = pool.length >= FOR_YOU_POOL_SIZE;
 
-    return this.toFeedPage(
+    const result = await this.toFeedPage(
       viewerId,
       page,
       limit,
       hasMore,
       hasMore ? this.oldestCursor(pool) : null,
     );
+    this.logger.debug(
+      `listForYou viewer=${viewerId} total=${formatPerfMs(perfElapsedMs(totalStart))} pre(excl+viewer)=${formatPerfMs(preMs)} pool=${formatPerfMs(poolMs)} rank=${formatPerfMs(rankMs)} poolSize=${pool.length}`,
+    );
+    return result;
   }
 
   async setLike(user: AuthenticatedUser, id: string, liked: boolean) {
@@ -422,18 +447,32 @@ export class ThoughtsService {
     nextCursor: string | null,
   ) {
     const page = thoughts.slice(0, limit);
+    const flagsStart = perfNow();
     const flags = await this.viewerFlags(
       viewerId,
       page.map((thought) => thought.id),
     );
+    const flagsMs = perfElapsedMs(flagsStart);
 
     const items = page.map((thought) =>
       this.toThoughtDto(thought, flags.get(thought.id) ?? this.emptyFlags()),
     );
 
-    await this.recordImpressions(
+    // Impressions must never block or fail the feed response. Enqueue in the
+    // background: HTTP request → feed generation → response, with queueing
+    // continuing concurrently. Errors are logged inside recordImpressions.
+    void this.recordImpressions(
       viewerId,
       items.map((item) => item.id),
+    ).catch((error) => {
+      this.logger.debug(
+        `recordImpressions background failure: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    });
+    this.logger.debug(
+      `toFeedPage viewer=${viewerId} flags=${formatPerfMs(flagsMs)} pageSize=${page.length}`,
     );
 
     return {
@@ -458,6 +497,7 @@ export class ThoughtsService {
     viewerId: string,
     thoughtIds: string[],
   ): Promise<void> {
+    const queueStart = perfNow();
     const events = thoughtIds.slice(0, IMPRESSION_EVENT_CAP).map((thoughtId) => ({
       actorId: viewerId,
       type: 'thought_impression',
@@ -470,6 +510,8 @@ export class ThoughtsService {
 
     // Impression volume scales with feed traffic, so it goes through the
     // worker. Single action events stay synchronous (cheap, ordered).
+    // This method is always invoked fire-and-forget from toFeedPage so the
+    // Redis round trip never delays the HTTP response.
     if (this.eventsQueue) {
       try {
         await this.eventsQueue.add(
@@ -481,6 +523,9 @@ export class ThoughtsService {
             removeOnComplete: 100,
             removeOnFail: 1000,
           },
+        );
+        this.logger.debug(
+          `recordImpressions viewer=${viewerId} count=${events.length} queue=${formatPerfMs(perfElapsedMs(queueStart))}`,
         );
         return;
       } catch (error) {
@@ -494,6 +539,9 @@ export class ThoughtsService {
 
     try {
       await this.prisma.thoughtEvent.createMany({ data: events });
+      this.logger.debug(
+        `recordImpressions viewer=${viewerId} count=${events.length} inline=${formatPerfMs(perfElapsedMs(queueStart))}`,
+      );
     } catch (error) {
       this.logger.debug(
         `Thought impressions dropped: ${
@@ -504,6 +552,7 @@ export class ThoughtsService {
   }
 
   private async feedExclusions(viewerId: string) {
+    const start = perfNow();
     const [blockedIds, hiddenIds, reportedIds] = await Promise.all([
       this.blockedUserIds(viewerId),
       this.prisma.thoughtHide
@@ -516,6 +565,9 @@ export class ThoughtsService {
         })
         .then((rows) => rows.map((row) => row.thoughtId)),
     ]);
+    this.logger.debug(
+      `feedExclusions viewer=${viewerId} total=${formatPerfMs(perfElapsedMs(start))} blocked=${blockedIds.length} hidden=${hiddenIds.length} reported=${reportedIds.length}`,
+    );
 
     return {
       authorId: { notIn: blockedIds },
@@ -542,6 +594,7 @@ export class ThoughtsService {
       return new Map<string, { liked: boolean; shared: boolean; hidden: boolean }>();
     }
 
+    const start = perfNow();
     const [likes, shares, hides] = await Promise.all([
       this.prisma.thoughtLike.findMany({
         where: { userId: viewerId, thoughtId: { in: thoughtIds } },
@@ -556,6 +609,9 @@ export class ThoughtsService {
         select: { thoughtId: true },
       }),
     ]);
+    this.logger.debug(
+      `viewerFlags viewer=${viewerId} total=${formatPerfMs(perfElapsedMs(start))} ids=${thoughtIds.length}`,
+    );
 
     const liked = new Set(likes.map((row) => row.thoughtId));
     const shared = new Set(shares.map((row) => row.thoughtId));

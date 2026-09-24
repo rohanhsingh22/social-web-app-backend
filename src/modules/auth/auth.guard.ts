@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -16,6 +17,8 @@ export type AuthenticatedRequest = Request & {
 
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly logger = new Logger(AuthGuard.name);
+
   constructor(
     private readonly authService: AuthService,
     private readonly reflector: Reflector,
@@ -38,8 +41,15 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('AUTH_REQUIRED');
     }
 
-    request.user = await this.authService.verifyAccessToken(token);
-    return true;
+    const start = Date.now();
+    try {
+      request.user = await this.authService.verifyAccessToken(token);
+      return true;
+    } finally {
+      this.logger.debug(
+        `AuthGuard verifyAccessToken ${(Date.now() - start).toFixed(1)}ms ${request.method} ${request.url}`,
+      );
+    }
   }
 
   private extractToken(request: Request): string | undefined {

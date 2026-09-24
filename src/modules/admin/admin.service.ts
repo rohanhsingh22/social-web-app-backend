@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   BannedWordSeverity,
@@ -15,6 +16,7 @@ import {
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { NotificationsService } from '@app/modules/notifications/notifications.service';
 import { ReportsService } from '@app/modules/reports/reports.service';
+import { AuthService } from '@app/modules/auth/auth.service';
 import { AdminActionDto } from './dto/admin-action.dto';
 import { CreateBannedWordDto, UpdateBannedWordDto } from './dto/banned-word.dto';
 import { CreateChannelDto, UpdateChannelDto } from './dto/channel-admin.dto';
@@ -26,6 +28,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly reportsService: ReportsService,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly authService?: AuthService,
   ) {}
 
   listReports(status?: ReportStatus, limit?: string) {
@@ -334,8 +337,8 @@ export class AdminService {
       throw new BadRequestException('CANNOT_MODERATE_SELF');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const user = await tx.user
+    const user = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user
         .update({
           where: { id: targetUserId },
           data: { status },
@@ -362,8 +365,21 @@ export class AdminService {
         reason: options.reason,
       });
 
-      return user;
+      return updated;
     });
+
+    // Ban/revoke must take effect immediately despite the 60s auth cache:
+    // drop cached session auth (fail-open, never breaks admin action).
+    // Status changes without revoke (mute/unmute/unban) rely on the short
+    // TTL for propagation; refresh path always hits DB so new tokens are
+    // correct immediately.
+    if (options.revokeSessions) {
+      await this.authService
+        ?.invalidateUserSessionsCache(targetUserId)
+        .catch(() => undefined);
+    }
+
+    return user;
   }
 
   private normalizeBannedWord(word: string) {

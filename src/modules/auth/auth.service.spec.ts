@@ -136,4 +136,115 @@ describe('AuthService', () => {
       UnauthorizedException,
     );
   });
+
+  it('returns cached auth without DB on cache hit', async () => {
+    const { service, verifyAsync, sessionFindUnique } = createService();
+    const redisGet = jest.fn().mockResolvedValue(
+      JSON.stringify({
+        userId: 'user-1',
+        status: 'active',
+        role: 'user',
+        expiresAt: new Date('2099-01-01T00:00:00.000Z').toISOString(),
+      }),
+    );
+    const redisService = {
+      connection: { get: redisGet, set: jest.fn(), del: jest.fn() },
+    };
+    const config = {
+      get: jest.fn(),
+      getOrThrow: jest.fn(),
+    } as unknown as ConfigService;
+    const jwt = { verifyAsync } as unknown as JwtService;
+    const prisma = {
+      session: { findUnique: sessionFindUnique },
+    } as unknown as PrismaService;
+    const sessionService = {} as unknown as SessionService;
+    const cachedService = new AuthService(
+      config,
+      jwt,
+      prisma,
+      sessionService,
+      redisService as never,
+    );
+    verifyAsync.mockResolvedValue({ id: 'user-1', sessionId: 'session-1' });
+
+    await expect(
+      cachedService.verifyAccessToken('access-token'),
+    ).resolves.toEqual({ id: 'user-1', status: 'active', role: 'user' });
+    expect(redisGet).toHaveBeenCalled();
+    expect(sessionFindUnique).not.toHaveBeenCalled();
+    expect(service).toBeDefined();
+  });
+
+  it('falls back to DB when Redis fails', async () => {
+    const { verifyAsync, sessionFindUnique } = createService();
+    const redisService = {
+      connection: {
+        get: jest.fn().mockRejectedValue(new Error('redis down')),
+        set: jest.fn().mockRejectedValue(new Error('redis down')),
+        del: jest.fn(),
+      },
+    };
+    const config = {
+      get: jest.fn(),
+      getOrThrow: jest.fn(),
+    } as unknown as ConfigService;
+    const jwt = { verifyAsync } as unknown as JwtService;
+    const prisma = {
+      session: { findUnique: sessionFindUnique },
+    } as unknown as PrismaService;
+    const fallbackService = new AuthService(
+      config,
+      jwt,
+      prisma,
+      {} as unknown as SessionService,
+      redisService as never,
+    );
+    verifyAsync.mockResolvedValue({ id: 'user-1', sessionId: 'session-1' });
+    sessionFindUnique.mockResolvedValue({
+      id: 'session-1',
+      revokedAt: null,
+      expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      user: { id: 'user-1', status: 'active', role: 'user' },
+    });
+
+    await expect(
+      fallbackService.verifyAccessToken('access-token'),
+    ).resolves.toEqual({ id: 'user-1', status: 'active', role: 'user' });
+    expect(sessionFindUnique).toHaveBeenCalled();
+  });
+
+  it('rejects banned users from cache', async () => {
+    const { verifyAsync } = createService();
+    const redisService = {
+      connection: {
+        get: jest.fn().mockResolvedValue(
+          JSON.stringify({
+            userId: 'user-1',
+            status: 'banned',
+            role: 'user',
+            expiresAt: new Date('2099-01-01T00:00:00.000Z').toISOString(),
+          }),
+        ),
+        set: jest.fn(),
+        del: jest.fn(),
+      },
+    };
+    const config = {
+      get: jest.fn(),
+      getOrThrow: jest.fn(),
+    } as unknown as ConfigService;
+    const cachedService = new AuthService(
+      config,
+      { verifyAsync } as unknown as JwtService,
+      {} as unknown as PrismaService,
+      {} as unknown as SessionService,
+      redisService as never,
+    );
+    verifyAsync.mockResolvedValue({ id: 'user-1', sessionId: 'session-1' });
+
+    await expect(
+      cachedService.verifyAccessToken('access-token'),
+    ).rejects.toThrow('ACCOUNT_NOT_ALLOWED');
+  });
 });

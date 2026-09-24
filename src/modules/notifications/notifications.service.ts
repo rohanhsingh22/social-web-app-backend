@@ -140,6 +140,7 @@ export class NotificationsService {
   }
 
   async list(userId: string, cursor?: string, limitValue?: string) {
+    const totalStart = Date.now();
     const limit = this.parseLimit(limitValue);
     const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
 
@@ -156,6 +157,9 @@ export class NotificationsService {
         where: { recipientId: userId, readAt: null },
       }),
     ]);
+    this.logger.debug(
+      `notifications.list user=${userId} total=${(Date.now() - totalStart).toFixed(1)}ms count=${notifications.length} unread=${unreadCount}`,
+    );
 
     const hasMore = notifications.length > limit;
     const page = hasMore ? notifications.slice(0, limit) : notifications;

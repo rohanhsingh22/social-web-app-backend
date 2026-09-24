@@ -57,6 +57,7 @@ export class ConnectionsService {
   ) {}
 
   async list(userId: string) {
+    const start = Date.now();
     const connections = await this.prisma.connection.findMany({
       where: {
         status: ConnectionStatus.accepted,
@@ -65,6 +66,9 @@ export class ConnectionsService {
       orderBy: { updatedAt: "desc" },
       include: this.connectionInclude(),
     });
+    this.logger.debug(
+      `connections.list user=${userId} count=${connections.length} ${(Date.now() - start).toFixed(1)}ms`,
+    );
 
     return connections.map((connection) =>
       this.mapConnection(connection, userId),
@@ -72,6 +76,7 @@ export class ConnectionsService {
   }
 
   async received(userId: string) {
+    const start = Date.now();
     const requests = await this.prisma.connection.findMany({
       where: {
         receiverId: userId,
@@ -80,11 +85,15 @@ export class ConnectionsService {
       orderBy: { createdAt: "desc" },
       include: this.connectionInclude(),
     });
+    this.logger.debug(
+      `connections.received user=${userId} count=${requests.length} ${(Date.now() - start).toFixed(1)}ms`,
+    );
 
     return requests.map((connection) => this.mapConnection(connection, userId));
   }
 
   async sent(userId: string) {
+    const start = Date.now();
     const requests = await this.prisma.connection.findMany({
       where: {
         requesterId: userId,
@@ -93,6 +102,9 @@ export class ConnectionsService {
       orderBy: { createdAt: "desc" },
       include: this.connectionInclude(),
     });
+    this.logger.debug(
+      `connections.sent user=${userId} count=${requests.length} ${(Date.now() - start).toFixed(1)}ms`,
+    );
 
     return requests.map((connection) => this.mapConnection(connection, userId));
   }
