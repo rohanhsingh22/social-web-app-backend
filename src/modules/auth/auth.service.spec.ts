@@ -98,7 +98,13 @@ describe('AuthService', () => {
     await expect(service.getMe('user-1')).resolves.toEqual({ id: 'user-1' });
     expect(userFindUnique).toHaveBeenCalledWith({
       where: { id: 'user-1' },
-      include: { profile: true },
+      include: {
+        profile: {
+          include: {
+            toli: { select: { id: true, name: true } },
+          },
+        },
+      },
     });
   });
 

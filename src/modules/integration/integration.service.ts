@@ -133,7 +133,13 @@ export class IntegrationService {
                     }
                   : {}),
               },
-              include: { profile: true },
+              include: {
+                profile: {
+                  include: {
+                    toli: { select: { id: true, name: true } },
+                  },
+                },
+              },
             });
           }
 
@@ -166,7 +172,13 @@ export class IntegrationService {
                 },
               },
             },
-            include: { profile: true },
+            include: {
+              profile: {
+                include: {
+                  toli: { select: { id: true, name: true } },
+                },
+              },
+            },
           });
         });
       } catch (error) {

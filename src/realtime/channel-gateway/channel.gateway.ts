@@ -25,6 +25,12 @@ import { RealtimeRateLimitService } from '@app/realtime/realtime-rate-limit/real
 const CHANNEL_MESSAGE_MAX_LENGTH = 500;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const SWEEP_INTERVAL_MS = 60_000;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
 
 type JoinPayload = { channelId?: string };
 type SendPayload = { channelId?: string; body?: string };
@@ -289,25 +295,32 @@ export class ChannelGateway
   }
 
   private async resolveChannel(channelId: string) {
-    const pub = await this.channels.getBySlugOrId(channelId).catch((error) => {
-      this.logger.error(
-        `Failed to resolve channel ${channelId}`,
-        error instanceof Error ? error.stack : undefined,
-      );
-      return null;
-    });
+    // UUIDs are looked up as Toli rooms first: the public lookup throws
+    // CHANNEL_NOT_FOUND for them, which previously logged a scary ERROR +
+    // stack on every Toli join/send/leave even though the fallback succeeded.
+    // Slugs keep the public-first order. A miss on both sides is the only
+    // case worth logging, once and without a stack trace.
+    const lookups = isUuid(channelId)
+      ? [
+          () => this.channels.getToliChannelById(channelId),
+          () => this.channels.getBySlugOrId(channelId),
+        ]
+      : [
+          () => this.channels.getBySlugOrId(channelId),
+          () => this.channels.getToliChannelById(channelId),
+        ];
 
-    if (pub) {
-      return pub;
+    for (const lookup of lookups) {
+      const channel = await lookup().catch(() => null);
+      if (channel) {
+        return channel;
+      }
     }
 
-    return this.channels.getToliChannelById(channelId).catch((error) => {
-      this.logger.error(
-        `Failed to resolve Toli channel ${channelId}`,
-        error instanceof Error ? error.stack : undefined,
-      );
-      return null;
-    });
+    this.logger.warn(
+      `Could not resolve channel ${channelId} as a public or Toli room`,
+    );
+    return null;
   }
 
   private async refreshPresence(): Promise<void> {

@@ -61,6 +61,8 @@ describe("UsersService", () => {
       requesterId: "viewer-id",
       receiverId: "internal-user-a",
       status: ConnectionStatus.pending,
+      createdAt: new Date("2026-05-16T06:00:00.000Z"),
+      updatedAt: new Date("2026-05-16T06:00:00.000Z"),
     } as never);
 
     await expect(
@@ -76,6 +78,8 @@ describe("UsersService", () => {
           id: "connection-id",
           status: ConnectionStatus.pending,
           direction: "sent",
+          createdAt: new Date("2026-05-16T06:00:00.000Z"),
+          updatedAt: new Date("2026-05-16T06:00:00.000Z"),
         },
       },
     ]);

@@ -73,6 +73,16 @@ type MessagePageResult = {
   };
 };
 
+// Raw (unmapped) page: this is what Redis holds. Mapping to public profile
+// cards happens on every read, never before a write — mapping twice drops
+// Toli avatars (the mapped card has no `profilePictureType` scalar, so a
+// second pass resolves every sender as provider with a null URL).
+type RawMessagePage = {
+  channel: Channel;
+  messages: ChannelMessageWithSender[];
+  pageInfo: MessagePageResult['pageInfo'];
+};
+
 type CachedChannel = Omit<Channel, 'createdAt' | 'updatedAt'> & {
   createdAt: string;
   updatedAt: string;
@@ -299,12 +309,13 @@ export class ChannelsService {
     }
 
     this.defaultChannelCache = this.entry(defaultChannel);
-    const page = await this.getMessages(
+    // getMessages warms the raw message cache itself on a miss; writing the
+    // mapped result here would reintroduce double-mapping corruption.
+    await this.getMessages(
       defaultChannel.slug,
       undefined,
       String(DEFAULT_MESSAGE_LIMIT),
     );
-    await this.writeMessageCache(defaultChannel.id, DEFAULT_MESSAGE_LIMIT, page);
   }
 
   async createMessage(channelId: string, senderId: string, body: string) {
@@ -357,7 +368,9 @@ export class ChannelsService {
       });
 
       const result = this.mapMessageWithProfileUrl(message);
-      void this.invalidateMessageCache(channelId);
+      // Await invalidation so an immediate GET after a send cannot hit the
+      // stale Redis first-page (30s TTL) and miss the new message.
+      await this.invalidateMessageCache(channelId);
       return result;
     } catch (error) {
       this.logger.error(
@@ -396,7 +409,13 @@ export class ChannelsService {
     if (!cursor) {
       const cached = await this.readMessageCache(channel.id, limit);
       if (cached) {
-        return cached;
+        return {
+          channel: cached.channel,
+          messages: cached.messages.map((message) =>
+            this.mapMessageWithProfileUrl(message),
+          ),
+          pageInfo: cached.pageInfo,
+        };
       }
     }
 
@@ -435,17 +454,24 @@ export class ChannelsService {
       ? page[page.length - 1]?.createdAt.toISOString()
       : null;
 
+    const pageInfo = {
+      hasMore,
+      nextCursor,
+    };
+    // Chronological for clients; kept raw here so the cache stores rows.
+    const ordered = page.reverse();
     const result = {
       channel,
-      messages: page.reverse().map((msg) => this.mapMessageWithProfileUrl(msg)),
-      pageInfo: {
-        hasMore,
-        nextCursor,
-      },
+      messages: ordered.map((msg) => this.mapMessageWithProfileUrl(msg)),
+      pageInfo,
     };
 
     if (!cursor) {
-      void this.writeMessageCache(channel.id, limit, result);
+      void this.writeMessageCache(channel.id, limit, {
+        channel,
+        messages: ordered,
+        pageInfo,
+      });
     }
 
     return result;
@@ -526,13 +552,15 @@ export class ChannelsService {
   }
 
   private messageCacheKey(channelId: string, limit: number) {
-    return `cache:channels:${channelId}:messages:latest:${limit}`;
+    // v2: v1 stored already-mapped cards, which double-mapping corrupted
+    // (Toli avatars lost). v1 entries are orphaned and expire naturally.
+    return `cache:channels:${channelId}:messages:latest:v2:${limit}`;
   }
 
   private async readMessageCache(
     channelId: string,
     limit: number,
-  ): Promise<MessagePageResult | null> {
+  ): Promise<RawMessagePage | null> {
     try {
       const raw = await this.redis.connection.get(
         this.messageCacheKey(channelId, limit),
@@ -550,13 +578,11 @@ export class ChannelsService {
           createdAt: new Date(cached.channel.createdAt),
           updatedAt: new Date(cached.channel.updatedAt),
         },
-        messages: cached.messages.map((message) =>
-          this.mapMessageWithProfileUrl({
-            ...message,
-            createdAt: new Date(message.createdAt),
-            deletedAt: message.deletedAt ? new Date(message.deletedAt) : null,
-          }),
-        ),
+        messages: cached.messages.map((message) => ({
+          ...message,
+          createdAt: new Date(message.createdAt),
+          deletedAt: message.deletedAt ? new Date(message.deletedAt) : null,
+        })),
         pageInfo: cached.pageInfo,
       };
     } catch (error) {
@@ -572,7 +598,7 @@ export class ChannelsService {
   private async writeMessageCache(
     channelId: string,
     limit: number,
-    page: MessagePageResult,
+    page: RawMessagePage,
   ) {
     try {
       await this.redis.connection.set(

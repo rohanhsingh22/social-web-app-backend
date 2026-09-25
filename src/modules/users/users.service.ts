@@ -66,6 +66,8 @@ export class UsersService {
         requesterId: true,
         receiverId: true,
         status: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -81,6 +83,10 @@ export class UsersService {
                 connection.status === ConnectionStatus.pending
                   ? this.pendingDirection(viewerId, connection)
                   : null,
+              // updatedAt is the acceptance-time proxy for accepted rows
+              // (no dedicated acceptedAt column); drives "friends for N days".
+              createdAt: connection.createdAt,
+              updatedAt: connection.updatedAt,
             }
           : null,
       },

@@ -75,7 +75,13 @@ export class AuthService {
       include: {
         user: {
           include: {
-            profile: true,
+            // Same nested Toli ref as getMe: the refresh body is normalized
+            // into the auth session on the client (OAuth callback bootstrap).
+            profile: {
+              include: {
+                toli: { select: { id: true, name: true } },
+              },
+            },
           },
         },
       },
@@ -165,7 +171,14 @@ export class AuthService {
     return this.prisma.user.findUnique({
       where: { id: userId },
       include: {
-        profile: true,
+        // Include the nested Toli ref: the frontend gates the "My Toli"
+        // channel section on `profile.toli`, and a scalar `toliId` alone
+        // leaves the Toli room hidden even for members.
+        profile: {
+          include: {
+            toli: { select: { id: true, name: true } },
+          },
+        },
       },
     });
   }

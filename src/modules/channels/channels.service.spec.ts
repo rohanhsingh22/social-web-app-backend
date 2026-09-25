@@ -234,6 +234,89 @@ describe('ChannelsService', () => {
     );
   });
 
+  it('caches raw rows so Toli avatars survive cache reads', async () => {
+    const { service, channel, channelMessage, redisConnection } =
+      createService();
+    channel.findFirst.mockResolvedValue({
+      id: 'channel-id',
+      slug: 'general',
+    });
+    channelMessage.findMany.mockResolvedValue([
+      {
+        id: 'message-1',
+        createdAt: new Date('2026-05-16T06:01:00.000Z'),
+        sender: {
+          id: 'user-2',
+          publicUserId: 'HT-7K4M9Q2X',
+          profile: {
+            username: 'two',
+            displayName: 'Two',
+            avatarUrl: 'https://provider.example/photo.png',
+            profilePictureType: 'toli',
+            toliAvatarKey: 'vector_01',
+            toli: { id: 'toli-id', name: 'Vector' },
+          },
+        },
+      },
+    ]);
+
+    const first = await service.getMessages('general', undefined, '50');
+    expect(first.messages).toHaveLength(1);
+    expect(first.messages[0]).toEqual(
+      expect.objectContaining({
+        sender: expect.objectContaining({
+          profile: expect.objectContaining({
+            profilePicture: expect.objectContaining({
+              type: 'toli',
+              toliAvatarKey: 'vector_01',
+            }),
+          }),
+        }),
+      }),
+    );
+
+    // The cache must hold raw rows (scalars), not mapped cards: mapping
+    // twice drops the Toli key and flips senders to provider/initial.
+    expect(redisConnection.set).toHaveBeenCalledTimes(1);
+    const stored = JSON.parse(
+      redisConnection.set.mock.calls[0][1] as string,
+    ) as {
+      messages: Array<{ sender: { profile: Record<string, unknown> } }>;
+    };
+    expect(stored.messages[0].sender.profile).toEqual(
+      expect.objectContaining({
+        profilePictureType: 'toli',
+        toliAvatarKey: 'vector_01',
+      }),
+    );
+    expect(
+      stored.messages[0].sender.profile.profilePicture,
+    ).toBeUndefined();
+
+    // Second call is served from cache without DB access, with the Toli
+    // avatar still intact.
+    redisConnection.get.mockResolvedValue(
+      redisConnection.set.mock.calls[0][1],
+    );
+    channelMessage.findMany.mockClear();
+
+    const second = await service.getMessages('general', undefined, '50');
+    expect(channelMessage.findMany).not.toHaveBeenCalled();
+    expect(second.messages).toHaveLength(1);
+    expect(second.messages[0]).toEqual(
+      expect.objectContaining({
+        sender: expect.objectContaining({
+          profile: expect.objectContaining({
+            profilePicture: expect.objectContaining({
+              type: 'toli',
+              toliAvatarKey: 'vector_01',
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it('requires a Toli before resolving the personal Toli room', async () => {
     const { service, profile } = createService();
     profile.findUnique.mockResolvedValue({ toliId: null });

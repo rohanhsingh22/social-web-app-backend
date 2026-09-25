@@ -225,13 +225,18 @@ export class ProfilesService {
         : null,
 
       profilePicture: {
-        type: profile.profilePictureType,
+        // A hidden avatar must not leak through the Toli key either: when
+        // avatar visibility is off, viewers see the provider fallback.
+        type:
+          profile.profilePictureType === 'toli' && visibility.avatar
+            ? 'toli'
+            : 'provider',
         avatarUrl:
           profile.profilePictureType === 'provider' && visibility.avatar
             ? profile.avatarUrl
             : null,
         toliAvatarKey:
-          profile.profilePictureType === 'toli'
+          profile.profilePictureType === 'toli' && visibility.avatar
             ? profile.toliAvatarKey
             : null,
         toli: profile.toli,
@@ -275,7 +280,7 @@ export class ProfilesService {
         ? profile.languages
         : [],
 
-      interests: visibility.languages
+      interests: visibility.interests
         ? profile.interests
         : [],
 
@@ -559,6 +564,7 @@ export class ProfilesService {
       primaryLanguage:
         visibility.primaryLanguage !== false,
       languages: visibility.languages !== false,
+      interests: visibility.interests !== false,
     };
   }
 }

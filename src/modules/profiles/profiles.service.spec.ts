@@ -293,6 +293,74 @@ describe('ProfilesService', () => {
     );
   });
 
+  it('hides fields the owner marked private on public profiles', async () => {
+    const { service, user } = createService();
+    user.findUnique.mockResolvedValue({
+      publicUserId: 'HT-7K4M9Q2X',
+      status: 'active',
+      profile: {
+        username: 'private_user',
+        displayName: 'Private User',
+        avatarUrl: 'https://example.com/avatar.png',
+        profilePictureType: 'toli',
+        toliAvatarKey: 'vector_01',
+        bio: 'Secret bio',
+        dob: new Date('2000-01-01T00:00:00.000Z'),
+        ageGroup: '22-25',
+        gender: 'female',
+        characterConfig: { gender: 'female' },
+        region: 'Europe',
+        city: 'Paris',
+        primaryLanguage: 'French',
+        languages: ['French'],
+        interests: ['music'],
+        isComplete: true,
+        createdAt: new Date('2026-05-16T06:00:00.000Z'),
+        toli: { id: 'toli-id', name: 'Vector' },
+      },
+      settings: {
+        profileVisibility: {
+          avatar: false,
+          bio: false,
+          dob: false,
+          age: false,
+          gender: false,
+          region: false,
+          city: false,
+          primaryLanguage: false,
+          languages: false,
+          interests: false,
+        },
+      },
+    });
+
+    await expect(
+      service.getUserProfile('HT-7K4M9Q2X', 'viewer-id'),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        username: 'private_user',
+        displayName: 'Private User',
+        avatarUrl: null,
+        profilePicture: {
+          type: 'provider',
+          avatarUrl: null,
+          toliAvatarKey: null,
+          toli: { id: 'toli-id', name: 'Vector' },
+        },
+        bio: null,
+        dob: null,
+        ageGroup: null,
+        gender: null,
+        characterConfig: null,
+        region: null,
+        city: null,
+        primaryLanguage: null,
+        languages: [],
+        interests: [],
+      }),
+    );
+  });
+
   it('returns the current profile picture', async () => {
     const { service, profile } = createService();
     profile.findUnique.mockResolvedValue({
