@@ -14,6 +14,10 @@ import {
 import { PrismaService } from "@app/core/prisma/prisma.service";
 import { ModerationService } from "@app/modules/moderation/moderation.service";
 import { profileCardSelect, toProfileCard } from "@app/common/profile-card";
+import {
+  applyAvatarVisibility,
+  fetchAvatarVisibility,
+} from "@app/common/avatar-visibility";
 import { NotificationsService } from "@app/modules/notifications/notifications.service";
 
 const DEFAULT_MESSAGE_LIMIT = 50;
@@ -100,10 +104,20 @@ export class DirectMessagesService {
       `dm.listConversations user=${userId} count=${memberships.length} ${(Date.now() - start).toFixed(1)}ms`,
     );
 
+    const avatars = await this.avatarVisibility(
+      userId,
+      memberships.flatMap((membership) => [
+        ...membership.conversation.members.map((member) => member.userId),
+        ...membership.conversation.messages.map(
+          (message) => message.sender.id,
+        ),
+      ]),
+    );
+
     return memberships.map((membership) => ({
-      ...this.mapConversation(membership.conversation, userId),
+      ...this.mapConversation(membership.conversation, userId, avatars),
       latestMessage: membership.conversation.messages[0]
-        ? this.mapMessage(membership.conversation.messages[0])
+        ? this.mapMessage(membership.conversation.messages[0], avatars)
         : null,
     }));
   }
@@ -167,9 +181,16 @@ export class DirectMessagesService {
       `dm.getMessages conv=${conversationId} total=${(Date.now() - totalStart).toFixed(1)}ms convLoad=${convMs.toFixed(1)}ms checks+messages=${restMs.toFixed(1)}ms count=${page.length}`,
     );
 
+    const avatars = await this.avatarVisibility(userId, [
+      ...conversation.members.map((member) => member.userId),
+      ...page.map((message) => message.sender.id),
+    ]);
+
     return {
-      conversation: this.mapConversation(conversation, userId),
-      messages: page.reverse().map((message) => this.mapMessage(message)),
+      conversation: this.mapConversation(conversation, userId, avatars),
+      messages: page
+        .reverse()
+        .map((message) => this.mapMessage(message, avatars)),
       pageInfo: {
         hasMore,
         nextCursor,
@@ -224,8 +245,12 @@ export class DirectMessagesService {
       });
     }
 
+    // Broadcast payload: the sender's own setting applies to every
+    // viewer (including the sender).
+    const avatars = await fetchAvatarVisibility(this.prisma, [userId]);
+
     return {
-      message: this.mapMessage(message),
+      message: this.mapMessage(message, avatars),
       recipientUserIds: conversation.members
         .map((member) => member.userId)
         .filter((memberUserId) => memberUserId !== userId),
@@ -368,6 +393,7 @@ export class DirectMessagesService {
   private mapConversation(
     conversation: ConversationWithMembers,
     viewerId: string,
+    avatarVisibility?: Map<string, boolean>,
   ) {
     return {
       id: conversation.id,
@@ -377,12 +403,20 @@ export class DirectMessagesService {
       members: conversation.members.map((member) => ({
         userId: member.userId,
         isSelf: member.userId === viewerId,
-        profile: member.user.profile,
+        profile: member.user.profile
+          ? applyAvatarVisibility(
+              member.user.profile,
+              avatarVisibility?.get(member.userId) ?? true,
+            )
+          : member.user.profile,
       })),
     };
   }
 
-  private mapMessage(message: DirectMessageWithSender) {
+  private mapMessage(
+    message: DirectMessageWithSender,
+    avatarVisibility?: Map<string, boolean>,
+  ) {
     return {
       id: message.id,
       conversationId: message.conversationId,
@@ -393,10 +427,23 @@ export class DirectMessagesService {
       sender: {
         id: message.sender.id,
         profile: message.sender.profile
-          ? { ...toProfileCard(message.sender.profile) }
+          ? {
+              ...toProfileCard(
+                message.sender.profile,
+                avatarVisibility?.get(message.sender.id) ?? true,
+              ),
+            }
           : null,
       },
     };
+  }
+
+  // The viewer always sees their own avatar; everyone else follows
+  // settings.profileVisibility.avatar.
+  private async avatarVisibility(viewerId: string, userIds: string[]) {
+    const visibility = await fetchAvatarVisibility(this.prisma, userIds);
+    visibility.set(viewerId, true);
+    return visibility;
   }
 
   private publicProfileSelect() {

@@ -15,6 +15,10 @@ import {
 import { RateLimitService } from "@app/common/rate-limit.service";
 import { normalizePublicUserId } from "@app/common/public-user-id";
 import { profileCardSelect } from "@app/common/profile-card";
+import {
+  applyAvatarVisibility,
+  fetchAvatarVisibility,
+} from "@app/common/avatar-visibility";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 import { NotificationsService } from "@app/modules/notifications/notifications.service";
 import { ThoughtsService } from "@app/modules/thoughts/thoughts.service";
@@ -25,6 +29,7 @@ const DAY_SECONDS = 24 * 60 * 60;
 
 type PublicUser = {
   id: string;
+  publicUserId: string;
   status: UserStatus;
   profile: PublicProfile | null;
 };
@@ -34,6 +39,9 @@ type PublicProfile = {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  profilePictureType: 'provider' | 'toli';
+  toliAvatarKey: string | null;
+  toli: { id: string; name: string } | null;
   bio: string | null;
   ageGroup: string | null;
   region: string | null;
@@ -72,8 +80,17 @@ export class ConnectionsService {
       `connections.list user=${userId} count=${connections.length} ${(Date.now() - start).toFixed(1)}ms`,
     );
 
+    const avatars = await fetchAvatarVisibility(
+      this.prisma,
+      connections.map((connection) => this.otherUserId(connection, userId)),
+    );
+
     return connections.map((connection) =>
-      this.mapConnection(connection, userId),
+      this.mapConnection(
+        connection,
+        userId,
+        avatars.get(this.otherUserId(connection, userId)) ?? true,
+      ),
     );
   }
 
@@ -91,7 +108,18 @@ export class ConnectionsService {
       `connections.received user=${userId} count=${requests.length} ${(Date.now() - start).toFixed(1)}ms`,
     );
 
-    return requests.map((connection) => this.mapConnection(connection, userId));
+    const avatars = await fetchAvatarVisibility(
+      this.prisma,
+      requests.map((request) => this.otherUserId(request, userId)),
+    );
+
+    return requests.map((connection) =>
+      this.mapConnection(
+        connection,
+        userId,
+        avatars.get(this.otherUserId(connection, userId)) ?? true,
+      ),
+    );
   }
 
   async sent(userId: string) {
@@ -108,7 +136,18 @@ export class ConnectionsService {
       `connections.sent user=${userId} count=${requests.length} ${(Date.now() - start).toFixed(1)}ms`,
     );
 
-    return requests.map((connection) => this.mapConnection(connection, userId));
+    const avatars = await fetchAvatarVisibility(
+      this.prisma,
+      requests.map((request) => this.otherUserId(request, userId)),
+    );
+
+    return requests.map((connection) =>
+      this.mapConnection(
+        connection,
+        userId,
+        avatars.get(this.otherUserId(connection, userId)) ?? true,
+      ),
+    );
   }
 
   async createRequest(requesterId: string, receiverPublicUserId: string) {
@@ -216,7 +255,11 @@ export class ConnectionsService {
       'connection:changed',
     );
 
-    return this.mapConnection(request, requesterId);
+    return this.mapConnection(
+      request,
+      requesterId,
+      await this.otherAvatarVisible(requesterId, receiverId),
+    );
   }
 
   async accept(userId: string, connectionId: string) {
@@ -253,15 +296,19 @@ export class ConnectionsService {
       this.logger.log(
         `Connection request ${connectionId} accepted by ${userId}`,
       );
-      return {
-        connection: this.mapConnection(accepted, userId),
-        conversation,
-      };
+      return { accepted, conversation };
     });
+
+    const otherId = this.otherUserId(result.accepted, userId);
+    const connection = this.mapConnection(
+      result.accepted,
+      userId,
+      await this.otherAvatarVisible(userId, otherId),
+    );
 
     const userName = await this.displayNameOf(userId);
     await this.notifications.connectionAccepted(
-      result.connection.requesterId,
+      result.accepted.requesterId,
       {
         userId,
         userName,
@@ -269,11 +316,11 @@ export class ConnectionsService {
       },
     );
     void this.fanout.publishUserEvent(
-      [result.connection.requesterId, result.connection.receiverId],
+      [result.accepted.requesterId, result.accepted.receiverId],
       'connection:changed',
     );
 
-    return result;
+    return { connection, conversation: result.conversation };
   }
 
   async reject(userId: string, connectionId: string) {
@@ -297,7 +344,11 @@ export class ConnectionsService {
       'connection:changed',
     );
 
-    return this.mapConnection(rejected, userId);
+    return this.mapConnection(
+      rejected,
+      userId,
+      await this.otherAvatarVisible(userId, this.otherUserId(rejected, userId)),
+    );
   }
 
   async cancel(userId: string, connectionId: string) {
@@ -321,7 +372,14 @@ export class ConnectionsService {
       'connection:changed',
     );
 
-    return this.mapConnection(cancelled, userId);
+    return this.mapConnection(
+      cancelled,
+      userId,
+      await this.otherAvatarVisible(
+        userId,
+        this.otherUserId(cancelled, userId),
+      ),
+    );
   }
 
   async remove(userId: string, connectionId: string) {
@@ -345,7 +403,11 @@ export class ConnectionsService {
       'connection:changed',
     );
 
-    return this.mapConnection(removed, userId);
+    return this.mapConnection(
+      removed,
+      userId,
+      await this.otherAvatarVisible(userId, this.otherUserId(removed, userId)),
+    );
   }
 
   private async getConnectionOrThrow(connectionId: string) {
@@ -471,6 +533,7 @@ export class ConnectionsService {
       requester: {
         select: {
           id: true,
+          publicUserId: true,
           status: true,
           profile: { select: this.publicProfileSelect() },
         },
@@ -478,6 +541,7 @@ export class ConnectionsService {
       receiver: {
         select: {
           id: true,
+          publicUserId: true,
           status: true,
           profile: { select: this.publicProfileSelect() },
         },
@@ -497,7 +561,20 @@ export class ConnectionsService {
     } satisfies Prisma.ProfileSelect;
   }
 
-  private mapConnection(connection: ConnectionWithProfiles, viewerId: string) {
+  private otherUserId(
+    connection: Pick<Connection, 'requesterId' | 'receiverId'>,
+    viewerId: string,
+  ) {
+    return connection.requesterId === viewerId
+      ? connection.receiverId
+      : connection.requesterId;
+  }
+
+  private mapConnection(
+    connection: ConnectionWithProfiles,
+    viewerId: string,
+    avatarVisible = true,
+  ) {
     const otherUser =
       connection.requesterId === viewerId
         ? connection.receiver
@@ -510,14 +587,25 @@ export class ConnectionsService {
       receiverId: connection.receiverId,
       createdAt: connection.createdAt,
       updatedAt: connection.updatedAt,
-      otherUser: this.mapPublicUser(otherUser),
+      otherUser: this.mapPublicUser(otherUser, avatarVisible),
     };
   }
 
-  private mapPublicUser(user: PublicUser) {
+  private mapPublicUser(user: PublicUser, avatarVisible = true) {
     return {
       id: user.id,
-      profile: user.profile,
+      publicUserId: user.publicUserId,
+      profile: user.profile
+        ? {
+            ...applyAvatarVisibility(user.profile, avatarVisible),
+            publicUserId: user.publicUserId,
+          }
+        : user.profile,
     };
+  }
+
+  private async otherAvatarVisible(viewerId: string, otherUserId: string) {
+    const visibility = await fetchAvatarVisibility(this.prisma, [otherUserId]);
+    return visibility.get(otherUserId) ?? true;
   }
 }

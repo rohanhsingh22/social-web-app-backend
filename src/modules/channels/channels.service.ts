@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Channel, ChannelType, MessageStatus } from '@prisma/client';
 import { profileCardSelect, toProfileCard } from '@app/common/profile-card';
+import { fetchAvatarVisibility } from '@app/common/avatar-visibility';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { RedisService } from '@app/core/redis/redis.service';
 import { ModerationService } from '@app/modules/moderation/moderation.service';
@@ -367,7 +368,10 @@ export class ChannelsService {
         },
       });
 
-      const result = this.mapMessageWithProfileUrl(message);
+      // Broadcast payload: the author's own setting applies to every
+      // viewer (including the author).
+      const avatars = await fetchAvatarVisibility(this.prisma, [senderId]);
+      const result = this.mapMessageWithProfileUrl(message, avatars);
       // Await invalidation so an immediate GET after a send cannot hit the
       // stale Redis first-page (30s TTL) and miss the new message.
       await this.invalidateMessageCache(channelId);
@@ -406,75 +410,82 @@ export class ChannelsService {
   ): Promise<MessagePageResult> {
     const limit = this.parseLimit(limitValue);
 
-    if (!cursor) {
-      const cached = await this.readMessageCache(channel.id, limit);
-      if (cached) {
-        return {
-          channel: cached.channel,
-          messages: cached.messages.map((message) =>
-            this.mapMessageWithProfileUrl(message),
-          ),
-          pageInfo: cached.pageInfo,
-        };
-      }
-    }
+    const cached = !cursor
+      ? await this.readMessageCache(channel.id, limit)
+      : undefined;
 
-    const messages = await this.prisma.channelMessage.findMany({
-      where: {
-        channelId: channel.id,
-        status: MessageStatus.active,
-        ...(cursor
-          ? {
-              createdAt: {
-                lt: this.parseCursor(cursor),
-              },
-            }
-          : {}),
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
-      include: {
-        sender: {
-          select: {
-            id: true,
-            publicUserId: true,
-            profile: {
-              select: {
-                ...profileCardSelect,
+    let ordered: ChannelMessageWithSender[];
+    let pageInfo: MessagePageResult['pageInfo'];
+
+    if (cached) {
+      ordered = cached.messages;
+      pageInfo = cached.pageInfo;
+    } else {
+      const messages = await this.prisma.channelMessage.findMany({
+        where: {
+          channelId: channel.id,
+          status: MessageStatus.active,
+          ...(cursor
+            ? {
+                createdAt: {
+                  lt: this.parseCursor(cursor),
+                },
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        include: {
+          sender: {
+            select: {
+              id: true,
+              publicUserId: true,
+              profile: {
+                select: {
+                  ...profileCardSelect,
+                },
               },
             },
           },
         },
-      },
-    });
-
-    const hasMore = messages.length > limit;
-    const page = hasMore ? messages.slice(0, limit) : messages;
-    const nextCursor = hasMore
-      ? page[page.length - 1]?.createdAt.toISOString()
-      : null;
-
-    const pageInfo = {
-      hasMore,
-      nextCursor,
-    };
-    // Chronological for clients; kept raw here so the cache stores rows.
-    const ordered = page.reverse();
-    const result = {
-      channel,
-      messages: ordered.map((msg) => this.mapMessageWithProfileUrl(msg)),
-      pageInfo,
-    };
-
-    if (!cursor) {
-      void this.writeMessageCache(channel.id, limit, {
-        channel,
-        messages: ordered,
-        pageInfo,
       });
+
+      const hasMore = messages.length > limit;
+      const page = hasMore ? messages.slice(0, limit) : messages;
+      const nextCursor = hasMore
+        ? page[page.length - 1]?.createdAt.toISOString()
+        : null;
+
+      pageInfo = {
+        hasMore,
+        nextCursor,
+      };
+      // Chronological for clients; kept raw here so the cache stores rows.
+      ordered = page.reverse();
+
+      if (!cursor) {
+        void this.writeMessageCache(channel.id, limit, {
+          channel,
+          messages: ordered,
+          pageInfo,
+        });
+      }
     }
 
-    return result;
+    // Public reads are guest-accessible (no viewer): every sender's own
+    // avatar setting applies.
+    const avatars = await fetchAvatarVisibility(
+      this.prisma,
+      ordered.map((msg) => msg.sender.id),
+    );
+
+    return {
+      channel,
+      messages: ordered.map((msg) =>
+        this.mapMessageWithProfileUrl(msg, avatars),
+      ),
+      pageInfo,
+    };
   }
 
   private parseLimit(value?: string) {
@@ -534,9 +545,13 @@ export class ChannelsService {
 
   private mapMessageWithProfileUrl(
     message: ChannelMessageWithSender,
+    avatarVisibility?: Map<string, boolean>,
   ): PublicChannelMessage {
     const frontendBaseUrl = this.config.get<string>('app.frontendBaseUrl') ?? '';
-    const card = toProfileCard(message.sender.profile);
+    const card = toProfileCard(
+      message.sender.profile,
+      avatarVisibility?.get(message.sender.id) ?? true,
+    );
     return {
       ...message,
       sender: {

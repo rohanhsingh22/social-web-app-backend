@@ -3,6 +3,10 @@ import { ConnectionStatus, UserStatus } from "@prisma/client";
 import { RateLimitService } from "@app/common/rate-limit.service";
 import { normalizePublicUserId } from "@app/common/public-user-id";
 import { profileCardSelect } from "@app/common/profile-card";
+import {
+  applyAvatarVisibility,
+  fetchAvatarVisibility,
+} from "@app/common/avatar-visibility";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 
 const SEARCH_RATE_LIMIT = 60;
@@ -71,10 +75,16 @@ export class UsersService {
       },
     });
 
+    const avatars = await fetchAvatarVisibility(this.prisma, [user.id]);
+
     return [
       {
         id: user.publicUserId,
-        profile: user.profile,
+        publicUserId: user.publicUserId,
+        profile: applyAvatarVisibility(
+          user.profile,
+          avatars.get(user.id) ?? true,
+        ),
         connection: connection
           ? {
               id: connection.id,

@@ -12,6 +12,9 @@ describe("UsersService", () => {
       connection: {
         findFirst: jest.fn(),
       },
+      userSettings: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     } as unknown as PrismaService;
     const rateLimit = {
       assertAllowed: jest.fn().mockResolvedValue(undefined),
@@ -70,6 +73,7 @@ describe("UsersService", () => {
     ).resolves.toEqual([
       {
         id: "HT-7K4M9Q2X",
+        publicUserId: "HT-7K4M9Q2X",
         profile: expect.objectContaining({
           username: "alice",
           ageGroup: "26-35",

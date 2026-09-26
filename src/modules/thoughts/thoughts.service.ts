@@ -7,7 +7,12 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
-import { MessageStatus, Prisma, UserStatus } from '@prisma/client';
+import {
+  ConnectionStatus,
+  MessageStatus,
+  Prisma,
+  UserStatus,
+} from '@prisma/client';
 import { Queue } from 'bullmq';
 import {
   THOUGHT_EVENTS_QUEUE,
@@ -18,6 +23,7 @@ import { ModerationService } from '@app/modules/moderation/moderation.service';
 import { AuthenticatedUser } from '@app/modules/auth/auth.types';
 import { perfNow, perfElapsedMs, formatPerfMs } from '@app/common/perf';
 import { normalizePublicUserId } from '@app/common/public-user-id';
+import { fetchAvatarVisibility } from '@app/common/avatar-visibility';
 import { ThoughtsRankingService } from './thoughts-ranking.service';
 import { ReportThoughtDto } from './dto/report-thought.dto';
 
@@ -155,7 +161,11 @@ export class ThoughtsService {
     const flags = await this.viewerFlags(viewerId, [id]);
     void this.recordEvent(viewerId, 'thought_open', id);
 
-    return this.toThoughtDto(full, flags.get(id) ?? this.emptyFlags());
+    return this.toThoughtDto(
+      full,
+      flags.get(id) ?? this.emptyFlags(),
+      await this.avatarVisible(viewerId, full.author.id),
+    );
   }
 
   async listFresh(viewerId: string, cursor?: string, limitValue?: string) {
@@ -368,6 +378,57 @@ export class ThoughtsService {
     };
   }
 
+  async listConnections(viewerId: string, cursor?: string, limitValue?: string) {
+    const limit = this.parseLimit(limitValue);
+    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+
+    const links = await this.prisma.connection.findMany({
+      where: {
+        status: ConnectionStatus.accepted,
+        OR: [{ requesterId: viewerId }, { receiverId: viewerId }],
+      },
+      select: { requesterId: true, receiverId: true },
+    });
+
+    const connectedIds = links.map((link) =>
+      link.requesterId === viewerId ? link.receiverId : link.requesterId,
+    );
+
+    if (connectedIds.length === 0) {
+      return {
+        thoughts: [],
+        pageInfo: { hasMore: false, nextCursor: null },
+      };
+    }
+
+    const exclusions = await this.feedExclusions(viewerId);
+
+    const thoughts = await this.prisma.thought.findMany({
+      where: {
+        status: MessageStatus.active,
+        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+        ...exclusions,
+        authorId: { in: connectedIds, ...exclusions.authorId },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      include: {
+        author: { select: thoughtAuthorSelect },
+        _count: { select: thoughtCountsSelect },
+      },
+    });
+
+    return this.toFeedPage(
+      viewerId,
+      thoughts,
+      limit,
+      thoughts.length > limit,
+      thoughts.length > limit
+        ? this.oldestCursor(thoughts.slice(0, limit))
+        : null,
+    );
+  }
+
   async setLike(user: AuthenticatedUser, id: string, liked: boolean) {
     this.assertWriter(user);
     const thought = await this.activeThoughtOrThrow(id);
@@ -532,7 +593,8 @@ export class ThoughtsService {
 
     void this.recordEvent(user.id, 'thought_comment', id);
 
-    return this.toCommentDto(comment);
+    // Own comment: the viewer always sees their own avatar.
+    return this.toCommentDto(comment, true);
   }
 
   async listComments(
@@ -559,7 +621,15 @@ export class ThoughtsService {
 
     const hasMore = comments.length > limit;
     const page = hasMore ? comments.slice(0, limit) : comments;
-    const items = page.reverse().map((comment) => this.toCommentDto(comment));
+    const avatars = await this.avatarVisibility(
+      viewerId,
+      page.map((comment) => comment.author.id),
+    );
+    const items = page
+      .reverse()
+      .map((comment) =>
+        this.toCommentDto(comment, avatars.get(comment.author.id) ?? true),
+      );
 
     return {
       thoughtId: id,
@@ -607,14 +677,24 @@ export class ThoughtsService {
   ) {
     const page = thoughts.slice(0, limit);
     const flagsStart = perfNow();
-    const flags = await this.viewerFlags(
-      viewerId,
-      page.map((thought) => thought.id),
-    );
+    const [flags, avatars] = await Promise.all([
+      this.viewerFlags(
+        viewerId,
+        page.map((thought) => thought.id),
+      ),
+      this.avatarVisibility(
+        viewerId,
+        page.map((thought) => thought.author.id),
+      ),
+    ]);
     const flagsMs = perfElapsedMs(flagsStart);
 
     const items = page.map((thought) =>
-      this.toThoughtDto(thought, flags.get(thought.id) ?? this.emptyFlags()),
+      this.toThoughtDto(
+        thought,
+        flags.get(thought.id) ?? this.emptyFlags(),
+        avatars.get(thought.author.id) ?? true,
+      ),
     );
 
     // Impressions must never block or fail the feed response. Enqueue in the
@@ -856,9 +936,9 @@ export class ThoughtsService {
     return text;
   }
 
-  private toAuthorCard(author: ThoughtAuthorRow) {
+  private toAuthorCard(author: ThoughtAuthorRow, avatarVisible = true) {
     const profile = author.profile;
-    const isToli = profile?.profilePictureType === 'toli';
+    const isToli = profile?.profilePictureType === 'toli' && avatarVisible;
 
     return {
       userId: author.id,
@@ -866,8 +946,9 @@ export class ThoughtsService {
       username: profile?.username ?? 'unknown',
       displayName: profile?.displayName ?? 'Unknown',
       profilePicture: {
-        type: profile?.profilePictureType ?? 'provider',
-        avatarUrl: !isToli ? (profile?.avatarUrl ?? null) : null,
+        type: isToli ? ('toli' as const) : ('provider' as const),
+        avatarUrl:
+          avatarVisible && !isToli ? (profile?.avatarUrl ?? null) : null,
         toliAvatarKey: isToli ? (profile?.toliAvatarKey ?? null) : null,
       },
       toli: profile?.toli ?? null,
@@ -877,13 +958,14 @@ export class ThoughtsService {
   private toThoughtDto(
     thought: ThoughtCardRow,
     viewer: { liked: boolean; shared: boolean; hidden: boolean },
+    avatarVisible = true,
   ) {
     return {
       id: thought.id,
       body: thought.body,
       status: thought.status,
       createdAt: thought.createdAt,
-      author: this.toAuthorCard(thought.author),
+      author: this.toAuthorCard(thought.author, avatarVisible),
       counts: {
         likes: thought._count.likes,
         comments: thought._count.comments,
@@ -893,20 +975,41 @@ export class ThoughtsService {
     };
   }
 
-  private toCommentDto(comment: {
-    id: string;
-    body: string;
-    status: MessageStatus;
-    createdAt: Date;
-    author: ThoughtAuthorRow;
-  }) {
+  private toCommentDto(
+    comment: {
+      id: string;
+      body: string;
+      status: MessageStatus;
+      createdAt: Date;
+      author: ThoughtAuthorRow;
+    },
+    avatarVisible = true,
+  ) {
     return {
       id: comment.id,
       body: comment.body,
       status: comment.status,
       createdAt: comment.createdAt,
-      author: this.toAuthorCard(comment.author),
+      author: this.toAuthorCard(comment.author, avatarVisible),
     };
+  }
+
+  // Avatar visibility for a batch of authors. The viewer always sees their
+  // own avatar (same rule as GET /profiles/me); everyone else follows
+  // settings.profileVisibility.avatar.
+  private async avatarVisibility(viewerId: string, authorIds: string[]) {
+    const visibility = await fetchAvatarVisibility(this.prisma, authorIds);
+    visibility.set(viewerId, true);
+    return visibility;
+  }
+
+  private async avatarVisible(viewerId: string, authorId: string) {
+    if (viewerId === authorId) {
+      return true;
+    }
+
+    const visibility = await fetchAvatarVisibility(this.prisma, [authorId]);
+    return visibility.get(authorId) ?? true;
   }
 
   private parseLimit(value?: string) {

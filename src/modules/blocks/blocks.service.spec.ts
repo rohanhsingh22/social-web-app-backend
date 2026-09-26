@@ -26,6 +26,9 @@ describe('BlocksService', () => {
       connection: {
         updateMany: jest.fn(),
       },
+      userSettings: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       $transaction: jest.fn((callback: (transaction: typeof tx) => unknown) =>
         callback(tx),
       ),

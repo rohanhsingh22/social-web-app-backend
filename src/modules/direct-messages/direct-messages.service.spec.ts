@@ -85,6 +85,9 @@ describe("DirectMessagesService", () => {
       connection: {
         findUnique: jest.fn(),
       },
+      userSettings: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     } as unknown as PrismaService;
     const moderation = {
       assertMessageAllowed: jest.fn().mockResolvedValue(undefined),

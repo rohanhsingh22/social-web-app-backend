@@ -48,6 +48,7 @@ describe('ThoughtsService', () => {
     const thoughtEvent = { create: jest.fn(), createMany: jest.fn() };
     const block = { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null) };
     const profile = { findUnique: jest.fn().mockResolvedValue(null) };
+    const connection = { findMany: jest.fn().mockResolvedValue([]) };
     const prisma = {
       thought,
       thoughtLike,
@@ -58,6 +59,8 @@ describe('ThoughtsService', () => {
       thoughtEvent,
       block,
       profile,
+      connection,
+      userSettings: { findMany: jest.fn().mockResolvedValue([]) },
     } as unknown as PrismaService;
     const moderation = {
       assertMessageAllowed: jest.fn().mockResolvedValue(undefined),
@@ -84,6 +87,7 @@ describe('ThoughtsService', () => {
       thoughtEvent,
       block,
       profile,
+      connection,
       moderation,
       ranking,
       eventsQueue,
@@ -373,5 +377,68 @@ describe('ThoughtsService', () => {
     expect(thoughtShare.deleteMany).toHaveBeenCalledWith({
       where: { thoughtId: 'thought-1', userId: 'user-1' },
     });
+  });
+
+  it('returns an empty page when the viewer has no connections', async () => {
+    const { service, thought, connection } = createService();
+    connection.findMany.mockResolvedValue([]);
+
+    const page = await service.listConnections('user-1', undefined, '20');
+
+    expect(connection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: 'accepted' }) }),
+    );
+    expect(thought.findMany).not.toHaveBeenCalled();
+    expect(page).toEqual({
+      thoughts: [],
+      pageInfo: { hasMore: false, nextCursor: null },
+    });
+  });
+
+  it('hides avatars of authors who disabled avatar visibility', async () => {
+    const { service, thought, prisma } = createService();
+    jest.mocked(prisma.userSettings.findMany).mockResolvedValue([
+      { userId: 'author-1', profileVisibility: { avatar: false } },
+    ] as never);
+    thought.findMany.mockResolvedValue([
+      thoughtRow({
+        author: authorRow({
+          profile: {
+            ...authorRow().profile,
+            profilePictureType: 'toli',
+            toliAvatarKey: 'vector_01',
+            avatarUrl: 'https://example.com/a.png',
+          },
+        }),
+      }),
+    ]);
+
+    const page = await service.listFresh('user-1', undefined, '20');
+
+    expect(page.thoughts[0].author.profilePicture).toEqual({
+      type: 'provider',
+      avatarUrl: null,
+      toliAvatarKey: null,
+    });
+  });
+
+  it('limits the connections feed to connected authors', async () => {
+    const { service, thought, connection } = createService();
+    connection.findMany.mockResolvedValue([
+      { requesterId: 'user-1', receiverId: 'user-2' },
+      { requesterId: 'user-3', receiverId: 'user-1' },
+    ]);
+    thought.findMany.mockResolvedValue([thoughtRow()]);
+
+    const page = await service.listConnections('user-1', undefined, '20');
+
+    expect(thought.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          authorId: expect.objectContaining({ in: ['user-2', 'user-3'] }),
+        }),
+      }),
+    );
+    expect(page.thoughts).toHaveLength(1);
   });
 });

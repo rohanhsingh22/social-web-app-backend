@@ -6,6 +6,10 @@ import {
 import { ConnectionStatus, Prisma, UserStatus } from '@prisma/client';
 import { normalizePublicUserId } from '@app/common/public-user-id';
 import { profileCardSelect } from '@app/common/profile-card';
+import {
+  applyAvatarVisibility,
+  fetchAvatarVisibility,
+} from '@app/common/avatar-visibility';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { FanoutService } from '@app/realtime/fanout/fanout.service';
 
@@ -36,7 +40,14 @@ export class BlocksService {
       include: this.blockInclude(),
     });
 
-    return blocks.map((block) => this.mapBlock(block));
+    const avatars = await fetchAvatarVisibility(
+      this.prisma,
+      blocks.map((block) => block.blockedUserId),
+    );
+
+    return blocks.map((block) =>
+      this.mapBlock(block, avatars.get(block.blockedUserId) ?? true),
+    );
   }
 
   async create(blockerId: string, blockedPublicUserId: string) {
@@ -100,7 +111,9 @@ export class BlocksService {
       'connection:changed',
     );
 
-    return this.mapBlock(block);
+    const avatars = await fetchAvatarVisibility(this.prisma, [blockedUserId]);
+
+    return this.mapBlock(block, avatars.get(blockedUserId) ?? true);
   }
 
   async remove(blockerId: string, blockedPublicUserId: string) {
@@ -171,13 +184,18 @@ export class BlocksService {
     } satisfies Prisma.ProfileSelect;
   }
 
-  private mapBlock(block: BlockWithUser) {
+  private mapBlock(block: BlockWithUser, avatarVisible = true) {
     return {
       id: block.id,
       blockerId: block.blockerId,
       blockedUserId: block.blockedUserId,
       createdAt: block.createdAt,
-      blockedUser: block.blockedUser,
+      blockedUser: {
+        ...block.blockedUser,
+        profile: block.blockedUser.profile
+          ? applyAvatarVisibility(block.blockedUser.profile, avatarVisible)
+          : block.blockedUser.profile,
+      },
     };
   }
 }

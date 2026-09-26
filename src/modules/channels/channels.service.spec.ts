@@ -26,6 +26,7 @@ describe('ChannelsService', () => {
       channel,
       channelMessage,
       profile,
+      userSettings: { findMany: jest.fn().mockResolvedValue([]) },
     } as unknown as PrismaService;
     const config = {
       get: jest.fn().mockReturnValue('http://localhost:3000'),
@@ -39,6 +40,7 @@ describe('ChannelsService', () => {
 
     return {
       service: new ChannelsService(prisma, config, redis, moderation),
+      prisma,
       channel,
       channelMessage,
       profile,
@@ -220,6 +222,43 @@ describe('ChannelsService', () => {
         ],
       }),
     );
+  });
+
+  it('hides avatars of senders who disabled avatar visibility', async () => {
+    const { service, channel, channelMessage, prisma } = createService();
+    channel.findFirst.mockResolvedValue({
+      id: 'channel-id',
+      slug: 'general',
+    });
+    channelMessage.findMany.mockResolvedValue([
+      {
+        id: 'message-1',
+        createdAt: new Date('2026-05-16T06:01:00.000Z'),
+        sender: {
+          id: 'user-9',
+          profile: {
+            username: 'nine',
+            displayName: 'Nine',
+            avatarUrl: 'https://example.com/nine.png',
+            profilePictureType: 'toli',
+            toliAvatarKey: 'vector_01',
+            toli: { id: 'toli-id', name: 'Vector' },
+          },
+        },
+      },
+    ]);
+    jest.mocked(prisma.userSettings.findMany).mockResolvedValue([
+      { userId: 'user-9', profileVisibility: { avatar: false } },
+    ] as never);
+
+    const result = await service.getMessages('general', undefined, '1');
+
+    expect(result.messages[0]?.sender.profile?.avatarUrl).toBeNull();
+    expect(result.messages[0]?.sender.profile?.profilePicture).toEqual({
+      type: 'provider',
+      avatarUrl: null,
+      toliAvatarKey: null,
+    });
   });
 
   it('rejects invalid message cursors', async () => {

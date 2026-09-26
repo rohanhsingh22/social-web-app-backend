@@ -44,6 +44,9 @@ describe("ConnectionsService", () => {
       profile: {
         findUnique: jest.fn().mockResolvedValue({ displayName: "Test User" }),
       },
+      userSettings: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       $transaction: jest.fn((callback: (transaction: typeof tx) => unknown) =>
         callback(tx),
       ),
@@ -181,6 +184,38 @@ describe("ConnectionsService", () => {
       undefined,
       { targetUserId: "user-a" },
     );
+  });
+
+  it("hides avatars of connections who disabled avatar visibility", async () => {
+    const { service, prisma } = createService();
+    const accepted = {
+      ...connection,
+      status: ConnectionStatus.accepted,
+      receiver: {
+        ...connection.receiver,
+        profile: {
+          ...connection.receiver.profile,
+          avatarUrl: "https://example.com/b.png",
+          profilePictureType: "toli",
+          toliAvatarKey: "vector_01",
+          toli: { id: "toli-id", name: "Vector" },
+        },
+      },
+    };
+    jest
+      .mocked(prisma.connection.findMany)
+      .mockResolvedValue([accepted] as never);
+    jest.mocked(prisma.userSettings.findMany).mockResolvedValue([
+      { userId: "user-b", profileVisibility: { avatar: false } },
+    ] as never);
+
+    const result = await service.list("user-a");
+
+    expect(result[0].otherUser.profile).toMatchObject({
+      avatarUrl: null,
+      profilePictureType: "provider",
+      toliAvatarKey: null,
+    });
   });
 
   it("publishes a fanout event to both parties on request", async () => {

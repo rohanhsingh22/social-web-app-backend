@@ -67,6 +67,20 @@ export class ThoughtsController {
     );
   }
 
+  @Get('connections')
+  async connections(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ThoughtFeedQueryDto,
+  ) {
+    return envelope(
+      await this.thoughtsService.listConnections(
+        user.id,
+        query.cursor,
+        query.limit,
+      ),
+    );
+  }
+
   @Get('by-user/:publicUserId')
   async byUser(
     @CurrentUser() user: AuthenticatedUser,
