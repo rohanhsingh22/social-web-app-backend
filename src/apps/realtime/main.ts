@@ -2,9 +2,11 @@ import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RedisIoAdapter } from '@app/realtime/redis-io.adapter';
+import { initSentry } from '@app/common/sentry';
 import { RealtimeAppModule } from './realtime-app.module';
 
 async function bootstrap() {
+  initSentry('realtime');
   const logger = new Logger('RealtimeBootstrap');
   const app = await NestFactory.create(RealtimeAppModule);
   const config = app.get(ConfigService);

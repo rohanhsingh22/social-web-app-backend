@@ -7,6 +7,7 @@ import { ConnectionStatus, Prisma, UserStatus } from '@prisma/client';
 import { normalizePublicUserId } from '@app/common/public-user-id';
 import { profileCardSelect } from '@app/common/profile-card';
 import { PrismaService } from '@app/core/prisma/prisma.service';
+import { FanoutService } from '@app/realtime/fanout/fanout.service';
 
 type BlockWithUser = Prisma.BlockGetPayload<{
   include: {
@@ -23,7 +24,10 @@ type BlockWithUser = Prisma.BlockGetPayload<{
 
 @Injectable()
 export class BlocksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fanout: FanoutService,
+  ) {}
 
   async list(blockerId: string) {
     const blocks = await this.prisma.block.findMany({
@@ -90,6 +94,12 @@ export class BlocksService {
       return created;
     });
 
+    // Blocking flips any pending/accepted connection between the pair.
+    void this.fanout.publishUserEvent(
+      [blockerId, blockedUserId],
+      'connection:changed',
+    );
+
     return this.mapBlock(block);
   }
 
@@ -123,6 +133,11 @@ export class BlocksService {
       data: { status: ConnectionStatus.cancelled },
     });
 
+    void this.fanout.publishUserEvent(
+      [blockerId, blockedUserId],
+      'connection:changed',
+    );
+
     return { blockedUserId: publicUserId, removed: deleted.count > 0 };
   }
 
@@ -136,6 +151,8 @@ export class BlocksService {
       blockedUser: {
         select: {
           id: true,
+          // Needed by clients to unblock (DELETE takes the public ID).
+          publicUserId: true,
           profile: { select: this.publicProfileSelect() },
         },
       },

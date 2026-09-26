@@ -58,13 +58,23 @@ describe("ConnectionsService", () => {
     const thoughts = {
       recordEvent: jest.fn().mockResolvedValue(undefined),
     } as unknown as ThoughtsService;
+    const fanout = {
+      publishUserEvent: jest.fn().mockResolvedValue(undefined),
+    };
 
     return {
-      service: new ConnectionsService(prisma, rateLimit, notifications, thoughts),
+      service: new ConnectionsService(
+        prisma,
+        rateLimit,
+        notifications,
+        thoughts,
+        fanout as never,
+      ),
       prisma,
       rateLimit,
       notifications,
       thoughts,
+      fanout,
       tx,
     };
   };
@@ -170,6 +180,32 @@ describe("ConnectionsService", () => {
       "connection_request",
       undefined,
       { targetUserId: "user-a" },
+    );
+  });
+
+  it("publishes a fanout event to both parties on request", async () => {
+    const { service, prisma, fanout } = createService();
+    jest
+      .mocked(prisma.user.findUnique)
+      .mockResolvedValueOnce({
+        id: "user-b",
+        status: UserStatus.active,
+      } as never)
+      .mockResolvedValueOnce({
+        id: "user-a",
+        status: UserStatus.active,
+      } as never);
+    jest.mocked(prisma.block.findFirst).mockResolvedValue(null);
+    jest.mocked(prisma.connection.findUnique).mockResolvedValue(null);
+    jest
+      .mocked(prisma.connection.create)
+      .mockResolvedValue(connection as never);
+
+    await service.createRequest("user-b", "HT-7K4M9Q2X");
+
+    expect(fanout.publishUserEvent).toHaveBeenCalledWith(
+      ["user-b", "user-a"],
+      "connection:changed",
     );
   });
 

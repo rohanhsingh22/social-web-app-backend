@@ -18,6 +18,7 @@ import { profileCardSelect } from "@app/common/profile-card";
 import { PrismaService } from "@app/core/prisma/prisma.service";
 import { NotificationsService } from "@app/modules/notifications/notifications.service";
 import { ThoughtsService } from "@app/modules/thoughts/thoughts.service";
+import { FanoutService } from "@app/realtime/fanout/fanout.service";
 
 const CONNECTION_REQUEST_DAILY_LIMIT = 30;
 const DAY_SECONDS = 24 * 60 * 60;
@@ -54,6 +55,7 @@ export class ConnectionsService {
     private readonly rateLimit: RateLimitService,
     private readonly notifications: NotificationsService,
     private readonly thoughts: ThoughtsService,
+    private readonly fanout: FanoutService,
   ) {}
 
   async list(userId: string) {
@@ -209,6 +211,10 @@ export class ConnectionsService {
     await this.thoughts.recordEvent(requesterId, 'connection_request', undefined, {
       targetUserId: receiverId,
     });
+    void this.fanout.publishUserEvent(
+      [requesterId, receiverId],
+      'connection:changed',
+    );
 
     return this.mapConnection(request, requesterId);
   }
@@ -262,6 +268,10 @@ export class ConnectionsService {
         conversationId: result.conversation.id,
       },
     );
+    void this.fanout.publishUserEvent(
+      [result.connection.requesterId, result.connection.receiverId],
+      'connection:changed',
+    );
 
     return result;
   }
@@ -282,6 +292,11 @@ export class ConnectionsService {
       include: this.connectionInclude(),
     });
 
+    void this.fanout.publishUserEvent(
+      [connection.requesterId, connection.receiverId],
+      'connection:changed',
+    );
+
     return this.mapConnection(rejected, userId);
   }
 
@@ -301,6 +316,11 @@ export class ConnectionsService {
       include: this.connectionInclude(),
     });
 
+    void this.fanout.publishUserEvent(
+      [connection.requesterId, connection.receiverId],
+      'connection:changed',
+    );
+
     return this.mapConnection(cancelled, userId);
   }
 
@@ -319,6 +339,11 @@ export class ConnectionsService {
       data: { status: ConnectionStatus.cancelled },
       include: this.connectionInclude(),
     });
+
+    void this.fanout.publishUserEvent(
+      [connection.requesterId, connection.receiverId],
+      'connection:changed',
+    );
 
     return this.mapConnection(removed, userId);
   }

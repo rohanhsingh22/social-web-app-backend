@@ -183,6 +183,94 @@ export class AdminService {
     });
   }
 
+  async deleteThought(adminId: string, thoughtId: string, dto: AdminActionDto) {
+    return this.prisma.$transaction(async (tx) => {
+      const thought = await tx.thought
+        .update({
+          where: { id: thoughtId },
+          data: {
+            status: MessageStatus.deleted,
+            deletedAt: new Date(),
+          },
+        })
+        .catch(() => {
+          throw new NotFoundException('THOUGHT_NOT_FOUND');
+        });
+
+      await this.audit(tx, {
+        adminId,
+        action: 'delete_thought',
+        targetUserId: thought.authorId,
+        targetMessageId: thought.id,
+        reason: dto.reason,
+      });
+
+      return thought;
+    });
+  }
+
+  listThoughtReports(status?: ReportStatus, limitValue?: string) {
+    if (status && !Object.values(ReportStatus).includes(status)) {
+      throw new BadRequestException('INVALID_REPORT_STATUS');
+    }
+
+    const limit = this.parseAdminLimit(limitValue);
+
+    return this.prisma.thoughtReport.findMany({
+      where: status ? { status } : undefined,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        reporter: {
+          select: {
+            id: true,
+            profile: {
+              select: { username: true, displayName: true },
+            },
+          },
+        },
+        thought: {
+          select: {
+            id: true,
+            body: true,
+            status: true,
+            createdAt: true,
+            authorId: true,
+          },
+        },
+      },
+    });
+  }
+
+  async resolveThoughtReport(
+    reportId: string,
+    adminId: string,
+    status: ReportStatus,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.thoughtReport
+        .update({
+          where: { id: reportId },
+          data: {
+            status,
+            reviewedBy: adminId,
+            reviewedAt: new Date(),
+          },
+        })
+        .catch(() => {
+          throw new NotFoundException('THOUGHT_REPORT_NOT_FOUND');
+        });
+
+      await this.audit(tx, {
+        adminId,
+        action: 'resolve_thought_report',
+        metadata: { thoughtReportId: reportId, status },
+      });
+
+      return updated;
+    });
+  }
+
   async createChannel(adminId: string, dto: CreateChannelDto) {
     const data = {
       name: dto.name.trim(),
@@ -380,6 +468,34 @@ export class AdminService {
     }
 
     return user;
+  }
+
+  async deleteBannedWord(adminId: string, bannedWordId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const bannedWord = await tx.bannedWord
+        .delete({ where: { id: bannedWordId } })
+        .catch(() => {
+          throw new NotFoundException('BANNED_WORD_NOT_FOUND');
+        });
+
+      await this.audit(tx, {
+        adminId,
+        action: 'delete_banned_word',
+        metadata: { bannedWordId },
+      });
+
+      return bannedWord;
+    });
+  }
+
+  private parseAdminLimit(limitValue?: string) {
+    const limit = Number(limitValue ?? 50);
+
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new BadRequestException('INVALID_LIMIT');
+    }
+
+    return limit;
   }
 
   private normalizeBannedWord(word: string) {

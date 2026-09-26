@@ -5,12 +5,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MessageStatus, ReportStatus, UserStatus } from '@prisma/client';
+import { normalizePublicUserId } from '@app/common/public-user-id';
 import { RateLimitService } from '@app/common/rate-limit.service';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { CreateReportDto } from './dto/create-report.dto';
 
 const REPORT_DAILY_LIMIT = 50;
 const DAY_SECONDS = 24 * 60 * 60;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class ReportsService {
@@ -95,8 +98,27 @@ export class ReportsService {
     });
   }
 
-  private resolveTarget(dto: CreateReportDto) {
-    const entries = [
+  private async findReportableUser(rawId: string) {
+    if (UUID_RE.test(rawId)) {
+      return this.prisma.user.findUnique({
+        where: { id: rawId },
+        select: { id: true, status: true },
+      });
+    }
+
+    const publicUserId = normalizePublicUserId(rawId);
+
+    if (!publicUserId) {
+      return null;
+    }
+
+    return this.prisma.user.findUnique({
+      where: { publicUserId },
+      select: { id: true, status: true },
+    });
+  }
+
+  private resolveTarget(dto: CreateReportDto) {    const entries = [
       ['targetUserId', dto.targetUserId],
       ['targetChannelMessageId', dto.targetChannelMessageId],
       ['targetDirectMessageId', dto.targetDirectMessageId],
@@ -122,19 +144,18 @@ export class ReportsService {
     },
   ) {
     if (target.targetUserId) {
-      if (target.targetUserId === reporterId) {
-        throw new BadRequestException('CANNOT_REPORT_SELF');
-      }
-
-      const user = await this.prisma.user.findUnique({
-        where: { id: target.targetUserId },
-        select: { id: true, status: true },
-      });
+      const user = await this.findReportableUser(target.targetUserId);
 
       if (!user || user.status === UserStatus.deleted) {
         throw new NotFoundException('USER_NOT_FOUND');
       }
 
+      if (user.id === reporterId) {
+        throw new BadRequestException('CANNOT_REPORT_SELF');
+      }
+
+      // Store the resolved internal id regardless of input format.
+      target.targetUserId = user.id;
       return;
     }
 

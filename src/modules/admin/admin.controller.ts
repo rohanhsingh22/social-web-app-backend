@@ -114,6 +114,42 @@ export class AdminController {
     });
   }
 
+  @Delete('thoughts/:id')
+  async deleteThought(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: AdminActionDto,
+  ) {
+    return envelope({
+      thought: await this.adminService.deleteThought(admin.id, id, body),
+    });
+  }
+
+  @Get('thought-reports')
+  async thoughtReports(
+    @Query('status') status?: ReportStatus,
+    @Query('limit') limit?: string,
+  ) {
+    return envelope({
+      reports: await this.adminService.listThoughtReports(status, limit),
+    });
+  }
+
+  @Post('thought-reports/:id/resolve')
+  async resolveThoughtReport(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: ReportStatusDto,
+  ) {
+    return envelope({
+      report: await this.adminService.resolveThoughtReport(
+        id,
+        admin.id,
+        body.status,
+      ),
+    });
+  }
+
   @Post('channels')
   async createChannel(
     @CurrentUser() admin: AuthenticatedUser,
@@ -170,6 +206,16 @@ export class AdminController {
   ) {
     return envelope({
       bannedWord: await this.adminService.updateBannedWord(admin.id, id, body),
+    });
+  }
+
+  @Delete('banned-words/:id')
+  async deleteBannedWord(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return envelope({
+      bannedWord: await this.adminService.deleteBannedWord(admin.id, id),
     });
   }
 }

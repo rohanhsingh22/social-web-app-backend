@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -17,6 +18,7 @@ import { CreateThoughtDto } from './dto/create-thought.dto';
 import { CreateThoughtCommentDto } from './dto/create-thought-comment.dto';
 import { ReportThoughtDto } from './dto/report-thought.dto';
 import { ThoughtFeedQueryDto } from './dto/thought-feed-query.dto';
+import { UpdateThoughtDto } from './dto/update-thought.dto';
 import { ThoughtsService } from './thoughts.service';
 
 @Controller('thoughts')
@@ -55,6 +57,32 @@ export class ThoughtsController {
     );
   }
 
+  @Get('mine')
+  async mine(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ThoughtFeedQueryDto,
+  ) {
+    return envelope(
+      await this.thoughtsService.listMine(user.id, query.cursor, query.limit),
+    );
+  }
+
+  @Get('by-user/:publicUserId')
+  async byUser(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('publicUserId') publicUserId: string,
+    @Query() query: ThoughtFeedQueryDto,
+  ) {
+    return envelope(
+      await this.thoughtsService.listByAuthor(
+        user.id,
+        publicUserId,
+        query.cursor,
+        query.limit,
+      ),
+    );
+  }
+
   @Get(':id')
   async getOne(
     @CurrentUser() user: AuthenticatedUser,
@@ -63,6 +91,26 @@ export class ThoughtsController {
     return envelope({
       thought: await this.thoughtsService.getThought(user.id, id),
     });
+  }
+
+  @Patch(':id')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async update(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: UpdateThoughtDto,
+  ) {
+    return envelope({
+      thought: await this.thoughtsService.updateThought(user, id, body.body),
+    });
+  }
+
+  @Delete(':id')
+  async remove(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return envelope(await this.thoughtsService.deleteThought(user, id));
   }
 
   @Get(':id/comments')
@@ -117,6 +165,14 @@ export class ThoughtsController {
     @Param('id') id: string,
   ) {
     return envelope(await this.thoughtsService.shareThought(user, id));
+  }
+
+  @Delete(':id/share')
+  async unshare(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return envelope(await this.thoughtsService.unshareThought(user, id));
   }
 
   @Post(':id/hide')

@@ -2,8 +2,12 @@ import { ReportReason } from '@prisma/client';
 import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateReportDto {
+  // Internal user UUID or public HiRotoli ID (HT-XXXXXXXX) — the service
+  // resolves public IDs so profile/report UIs that only know the public ID
+  // can file user reports.
   @IsOptional()
-  @IsUUID()
+  @IsString()
+  @MaxLength(40)
   targetUserId?: string;
 
   @IsOptional()

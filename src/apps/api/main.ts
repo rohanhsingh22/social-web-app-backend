@@ -3,12 +3,15 @@ import helmet from 'helmet';
 import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { setupExpressErrorHandler } from '@sentry/nestjs';
 import { AllExceptionsFilter } from '@app/common/all-exceptions.filter';
+import { initSentry } from '@app/common/sentry';
 import { ChannelsService } from '@app/modules/channels/channels.service';
 import { ApiAppModule } from './api-app.module';
 import type { Request, Response, NextFunction } from 'express';
 
 async function bootstrap() {
+  initSentry('api');
   const logger = new Logger('ApiBootstrap');
   const app = await NestFactory.create(ApiAppModule);
   const config = app.get(ConfigService);
@@ -36,6 +39,7 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(new AllExceptionsFilter());
+  setupExpressErrorHandler(app);
 
   app.enableShutdownHooks();
   await app.init();

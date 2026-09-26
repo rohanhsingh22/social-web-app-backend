@@ -39,9 +39,9 @@ describe('ThoughtsService', () => {
   });
 
   const createService = () => {
-    const thought = { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn() };
+    const thought = { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() };
     const thoughtLike = { create: jest.fn(), deleteMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) };
-    const thoughtShare = { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) };
+    const thoughtShare = { create: jest.fn(), deleteMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) };
     const thoughtHide = { create: jest.fn(), deleteMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) };
     const thoughtReport = { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) };
     const thoughtComment = { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) };
@@ -276,5 +276,102 @@ describe('ThoughtsService', () => {
         ],
       }),
     );
+  });
+
+  it('lets the author edit their thought', async () => {
+    const { service, thought, moderation } = createService();
+    thought.findUnique.mockResolvedValue({
+      id: 'thought-1',
+      authorId: 'user-1',
+      status: 'active',
+    });
+    thought.update.mockResolvedValue(
+      thoughtRow({ body: 'Edited body' }),
+    );
+
+    const result = await service.updateThought(
+      { ...activeUser },
+      'thought-1',
+      '  Edited body  ',
+    );
+
+    expect(moderation.assertMessageAllowed).toHaveBeenCalledWith('Edited body');
+    expect(thought.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'thought-1' },
+        data: { body: 'Edited body' },
+      }),
+    );
+    expect(result).toEqual(expect.objectContaining({ body: 'Edited body' }));
+  });
+
+  it('rejects edits from non-authors and blank bodies', async () => {
+    const { service, thought } = createService();
+    thought.findUnique.mockResolvedValue({
+      id: 'thought-1',
+      authorId: 'user-2',
+      status: 'active',
+    });
+
+    await expect(
+      service.updateThought({ ...activeUser }, 'thought-1', 'hello'),
+    ).rejects.toThrow(ForbiddenException);
+
+    thought.findUnique.mockResolvedValue({
+      id: 'thought-1',
+      authorId: 'user-1',
+      status: 'active',
+    });
+
+    await expect(
+      service.updateThought({ ...activeUser }, 'thought-1', '   '),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('soft-deletes only the author’s own thought', async () => {
+    const { service, thought } = createService();
+    thought.findUnique.mockResolvedValue({
+      id: 'thought-1',
+      authorId: 'user-1',
+      status: 'active',
+    });
+    thought.update.mockResolvedValue(thoughtRow());
+
+    await expect(
+      service.deleteThought({ ...activeUser }, 'thought-1'),
+    ).resolves.toEqual({ ok: true });
+    expect(thought.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'thought-1' },
+        data: expect.objectContaining({ status: 'deleted' }),
+      }),
+    );
+
+    thought.findUnique.mockResolvedValue({
+      id: 'thought-1',
+      authorId: 'user-2',
+      status: 'active',
+    });
+
+    await expect(
+      service.deleteThought({ ...activeUser }, 'thought-1'),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('unshares by deleting the share row', async () => {
+    const { service, thought, thoughtShare } = createService();
+    thought.findUnique.mockResolvedValue({
+      id: 'thought-1',
+      authorId: 'user-2',
+      status: 'active',
+    });
+    thoughtShare.deleteMany.mockResolvedValue({ count: 1 });
+
+    await expect(
+      service.unshareThought({ ...activeUser }, 'thought-1'),
+    ).resolves.toEqual({ ok: true, shared: false });
+    expect(thoughtShare.deleteMany).toHaveBeenCalledWith({
+      where: { thoughtId: 'thought-1', userId: 'user-1' },
+    });
   });
 });

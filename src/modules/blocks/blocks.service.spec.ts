@@ -30,10 +30,14 @@ describe('BlocksService', () => {
         callback(tx),
       ),
     } as unknown as PrismaService;
+    const fanout = {
+      publishUserEvent: jest.fn().mockResolvedValue(undefined),
+    };
 
     return {
-      service: new BlocksService(prisma),
+      service: new BlocksService(prisma, fanout as never),
       prisma,
+      fanout,
       tx,
     };
   };

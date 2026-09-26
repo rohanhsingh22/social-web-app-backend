@@ -17,6 +17,7 @@ import { PrismaService } from '@app/core/prisma/prisma.service';
 import { ModerationService } from '@app/modules/moderation/moderation.service';
 import { AuthenticatedUser } from '@app/modules/auth/auth.types';
 import { perfNow, perfElapsedMs, formatPerfMs } from '@app/common/perf';
+import { normalizePublicUserId } from '@app/common/public-user-id';
 import { ThoughtsRankingService } from './thoughts-ranking.service';
 import { ReportThoughtDto } from './dto/report-thought.dto';
 
@@ -260,6 +261,113 @@ export class ThoughtsService {
     return result;
   }
 
+  async listMine(viewerId: string, cursor?: string, limitValue?: string) {
+    const limit = this.parseLimit(limitValue);
+    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+
+    const thoughts = await this.prisma.thought.findMany({
+      where: {
+        status: MessageStatus.active,
+        authorId: viewerId,
+        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      include: {
+        author: { select: thoughtAuthorSelect },
+        _count: { select: thoughtCountsSelect },
+      },
+    });
+
+    return this.toFeedPage(
+      viewerId,
+      thoughts,
+      limit,
+      thoughts.length > limit,
+      thoughts.length > limit
+        ? this.oldestCursor(thoughts.slice(0, limit))
+        : null,
+    );
+  }
+
+  async listByAuthor(
+    viewerId: string,
+    publicUserIdParam: string,
+    cursor?: string,
+    limitValue?: string,
+  ) {
+    const publicUserId = normalizePublicUserId(publicUserIdParam ?? '');
+
+    if (!publicUserId) {
+      throw new NotFoundException('USER_NOT_FOUND');
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { publicUserId },
+      select: { id: true, status: true, publicUserId: true },
+    });
+
+    if (!target || target.status !== UserStatus.active) {
+      throw new NotFoundException('USER_NOT_FOUND');
+    }
+
+    await this.assertNotBlocked(viewerId, target.id);
+
+    const limit = this.parseLimit(limitValue);
+    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+
+    // Your own tab shows everything you posted (even items you hid).
+    // Other users' lists respect your hides/reports.
+    let excludedIds: string[] = [];
+    if (viewerId !== target.id) {
+      const [hiddenIds, reportedIds] = await Promise.all([
+        this.prisma.thoughtHide
+          .findMany({
+            where: { userId: viewerId },
+            select: { thoughtId: true },
+          })
+          .then((rows) => rows.map((row) => row.thoughtId)),
+        this.prisma.thoughtReport
+          .findMany({
+            where: { reporterId: viewerId },
+            select: { thoughtId: true },
+          })
+          .then((rows) => rows.map((row) => row.thoughtId)),
+      ]);
+      excludedIds = [...hiddenIds, ...reportedIds];
+    }
+
+    const thoughts = await this.prisma.thought.findMany({
+      where: {
+        status: MessageStatus.active,
+        authorId: target.id,
+        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+        ...(excludedIds.length > 0 ? { id: { notIn: excludedIds } } : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      include: {
+        author: { select: thoughtAuthorSelect },
+        _count: { select: thoughtCountsSelect },
+      },
+    });
+
+    const page = await this.toFeedPage(
+      viewerId,
+      thoughts,
+      limit,
+      thoughts.length > limit,
+      thoughts.length > limit
+        ? this.oldestCursor(thoughts.slice(0, limit))
+        : null,
+    );
+
+    return {
+      ...page,
+      author: { userId: target.id, publicUserId: target.publicUserId },
+    };
+  }
+
   async setLike(user: AuthenticatedUser, id: string, liked: boolean) {
     this.assertWriter(user);
     const thought = await this.activeThoughtOrThrow(id);
@@ -302,6 +410,57 @@ export class ThoughtsService {
     }
 
     void this.recordEvent(user.id, 'thought_share', id);
+
+    return { ok: true };
+  }
+
+  async unshareThought(user: AuthenticatedUser, id: string) {
+    this.assertWriter(user);
+    await this.activeThoughtOrThrow(id);
+
+    await this.prisma.thoughtShare.deleteMany({
+      where: { thoughtId: id, userId: user.id },
+    });
+
+    return { ok: true, shared: false };
+  }
+
+  async updateThought(user: AuthenticatedUser, id: string, body: string) {
+    this.assertWriter(user);
+    const thought = await this.activeThoughtOrThrow(id);
+    this.assertOwner(user.id, thought.authorId);
+
+    const text = this.normalizeBody(
+      body,
+      THOUGHT_BODY_MAX_LENGTH,
+      'THOUGHT_BODY_REQUIRED',
+      'THOUGHT_BODY_TOO_LONG',
+    );
+    await this.moderation.assertMessageAllowed(text);
+
+    const updated = await this.prisma.thought.update({
+      where: { id },
+      data: { body: text },
+      include: {
+        author: { select: thoughtAuthorSelect },
+        _count: { select: thoughtCountsSelect },
+      },
+    });
+
+    const flags = await this.viewerFlags(user.id, [id]);
+
+    return this.toThoughtDto(updated, flags.get(id) ?? this.emptyFlags());
+  }
+
+  async deleteThought(user: AuthenticatedUser, id: string) {
+    this.assertWriter(user);
+    const thought = await this.activeThoughtOrThrow(id);
+    this.assertOwner(user.id, thought.authorId);
+
+    await this.prisma.thought.update({
+      where: { id },
+      data: { status: MessageStatus.deleted, deletedAt: new Date() },
+    });
 
     return { ok: true };
   }
@@ -669,6 +828,12 @@ export class ThoughtsService {
   private assertWriter(user: AuthenticatedUser) {
     if (user.status !== UserStatus.active) {
       throw new ForbiddenException('ACCOUNT_NOT_ALLOWED');
+    }
+  }
+
+  private assertOwner(userId: string, authorId: string) {
+    if (userId !== authorId) {
+      throw new ForbiddenException('THOUGHT_ACTION_NOT_ALLOWED');
     }
   }
 

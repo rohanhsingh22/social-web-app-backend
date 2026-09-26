@@ -96,4 +96,47 @@ describe('ReportsService', () => {
       }),
     ).rejects.toThrow(NotFoundException);
   });
+
+  it('resolves a public HiRotoli ID to the internal user id', async () => {
+    const { service, prisma } = createService();
+    jest.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: 'user-b',
+      status: 'active',
+    } as never);
+    jest.mocked(prisma.report.create).mockResolvedValue({
+      id: 'report-id',
+      targetUserId: 'user-b',
+    } as never);
+
+    await expect(
+      service.create('user-a', {
+        targetUserId: 'ht-7k4m9q2x',
+        reason: ReportReason.harassment,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ id: 'report-id' }));
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { publicUserId: 'HT-7K4M9Q2X' },
+      select: { id: true, status: true },
+    });
+    expect(prisma.report.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ targetUserId: 'user-b' }),
+      }),
+    );
+  });
+
+  it('rejects self-reports resolved through a public ID', async () => {
+    const { service, prisma } = createService();
+    jest.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: 'user-a',
+      status: 'active',
+    } as never);
+
+    await expect(
+      service.create('user-a', {
+        targetUserId: 'HT-7K4M9Q2X',
+        reason: ReportReason.spam,
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
 });

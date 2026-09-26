@@ -31,8 +31,16 @@ describe('AdminService', () => {
       bannedWord: {
         create: jest.fn(),
         update: jest.fn(),
+        delete: jest.fn(),
       },
       report: {
+        update: jest.fn(),
+      },
+      thought: {
+        update: jest.fn(),
+      },
+      thoughtReport: {
+        findMany: jest.fn(),
         update: jest.fn(),
       },
     };
@@ -164,5 +172,91 @@ describe('AdminService', () => {
         targetUserId: 'user-1',
       }),
     });
+  });
+
+  it('soft-deletes thoughts with an audit action', async () => {
+    const { service, tx } = createService();
+    tx.thought.update.mockResolvedValue({
+      id: 'thought-1',
+      authorId: 'user-1',
+      status: MessageStatus.deleted,
+    });
+
+    await expect(
+      service.deleteThought('admin-id', 'thought-1', {}),
+    ).resolves.toEqual(
+      expect.objectContaining({ status: MessageStatus.deleted }),
+    );
+    expect(tx.thought.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'thought-1' } }),
+    );
+    expect(tx.moderationAction.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'delete_thought',
+        targetUserId: 'user-1',
+      }),
+    });
+  });
+
+  it('lists thought reports with status and limit', async () => {
+    const { service, prisma } = createService();
+    const thoughtReport = { findMany: jest.fn().mockResolvedValue([]) };
+    (prisma as unknown as { thoughtReport: unknown }).thoughtReport =
+      thoughtReport;
+
+    await service.listThoughtReports(ReportStatus.open, '10');
+
+    expect(thoughtReport.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: ReportStatus.open },
+        take: 10,
+      }),
+    );
+    expect(() =>
+      service.listThoughtReports('bogus' as ReportStatus, undefined),
+    ).toThrow(BadRequestException);
+  });
+
+  it('resolves thought reports with an audit action', async () => {
+    const { service, tx } = createService();
+    const thoughtReport = { update: jest.fn().mockResolvedValue({ id: 'r1' }) };
+    (tx as unknown as { thoughtReport: unknown }).thoughtReport =
+      thoughtReport;
+
+    await service.resolveThoughtReport('r1', 'admin-id', ReportStatus.resolved);
+
+    expect(thoughtReport.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'r1' },
+        data: expect.objectContaining({
+          status: ReportStatus.resolved,
+          reviewedBy: 'admin-id',
+        }),
+      }),
+    );
+    expect(tx.moderationAction.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'resolve_thought_report' }),
+    });
+  });
+
+  it('deletes banned words with an audit action', async () => {
+    const { service, tx } = createService();
+    tx.bannedWord.delete.mockResolvedValue({ id: 'bw-1', word: 'spam' });
+
+    await expect(
+      service.deleteBannedWord('admin-id', 'bw-1'),
+    ).resolves.toEqual(expect.objectContaining({ id: 'bw-1' }));
+    expect(tx.moderationAction.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'delete_banned_word' }),
+    });
+  });
+
+  it('hides missing banned words as not found', async () => {
+    const { service, tx } = createService();
+    tx.bannedWord.delete.mockRejectedValue(new Error('missing'));
+
+    await expect(service.deleteBannedWord('admin-id', 'missing')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 });

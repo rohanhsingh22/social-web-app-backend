@@ -59,5 +59,9 @@ export const appConfig = () => {
   logging: {
     level: process.env.LOG_LEVEL ?? 'log',
   },
+  retention: {
+    // Days to keep channel/DM messages. 0 (default) disables deletion.
+    messageRetentionDays: Number(process.env.MESSAGE_RETENTION_DAYS ?? 0),
+  },
   };
 };
