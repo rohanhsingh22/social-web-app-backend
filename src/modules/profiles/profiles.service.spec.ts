@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ThoughtsService } from '@app/modules/thoughts/thoughts.service';
 import { ToliService } from '@app/modules/toli/toli.service';
+import { FanoutService } from '@app/realtime/fanout/fanout.service';
 import { ProfilesService } from './profiles.service';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 
@@ -24,12 +25,16 @@ describe('ProfilesService', () => {
     const thoughtsService = {
       recordEvent: jest.fn(),
     } as unknown as ThoughtsService;
+    const fanout = {
+      publishUserEvent: jest.fn().mockResolvedValue(undefined),
+    } as unknown as FanoutService;
 
     return {
-      service: new ProfilesService(prisma, toliService, thoughtsService),
+      service: new ProfilesService(prisma, toliService, thoughtsService, fanout),
       profile,
       user,
       toliService,
+      fanout,
     };
   };
 
@@ -584,5 +589,62 @@ describe('ProfilesService', () => {
       'TOLI_NOT_FOUND',
     );
     expect(profile.update).not.toHaveBeenCalled();
+  });
+
+  it('publishes a toli change so gateways evict stale room access', async () => {
+    const { service, profile, toliService, fanout } = createService();
+    const findToliById = toliService.findToliById as jest.Mock;
+    findToliById.mockResolvedValue({ id: 'vector-id', name: 'Vector' });
+    profile.findUnique
+      .mockResolvedValueOnce({
+        toliId: null,
+        profilePictureType: 'provider',
+        toliAvatarKey: null,
+      })
+      .mockResolvedValueOnce({
+        userId: 'user-id',
+        username: 'user_name',
+        displayName: 'User Name',
+        avatarUrl: null,
+        profilePictureType: 'provider',
+        toliAvatarKey: null,
+        toli: { id: 'vector-id', name: 'Vector' },
+        user: { publicUserId: 'HT-7K4M9Q2X' },
+      });
+    profile.update.mockResolvedValue({});
+
+    await service.selectToli('user-id', 'vector-id');
+
+    expect(fanout.publishUserEvent).toHaveBeenCalledWith(
+      ['user-id'],
+      'toli:changed',
+    );
+  });
+
+  it('does not publish when the Toli selection is unchanged', async () => {
+    const { service, profile, toliService, fanout } = createService();
+    const findToliById = toliService.findToliById as jest.Mock;
+    findToliById.mockResolvedValue({ id: 'vector-id', name: 'Vector' });
+    profile.findUnique
+      .mockResolvedValueOnce({
+        toliId: 'vector-id',
+        profilePictureType: 'provider',
+        toliAvatarKey: null,
+      })
+      .mockResolvedValueOnce({
+        userId: 'user-id',
+        username: 'user_name',
+        displayName: 'User Name',
+        avatarUrl: null,
+        profilePictureType: 'provider',
+        toliAvatarKey: null,
+        toli: { id: 'vector-id', name: 'Vector' },
+        user: { publicUserId: 'HT-7K4M9Q2X' },
+      });
+
+    await service.selectToli('user-id', 'vector-id');
+
+    expect(profile.update).not.toHaveBeenCalled();
+    expect(fanout.publishUserEvent).not.toHaveBeenCalled();
   });
 });

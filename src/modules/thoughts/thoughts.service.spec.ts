@@ -69,7 +69,10 @@ describe('ThoughtsService', () => {
       rank: jest.fn((items: unknown[]) =>
         (items as { id: string }[]).map((thought) => ({ thought, score: 1 })),
       ),
-      applyAuthorDiversity: jest.fn((items: unknown[]) => items),
+      // Faithful to the real implementation: never more than `limit` picks.
+      applyAuthorDiversity: jest.fn((items: unknown[], limit: number) =>
+        (items as unknown[]).slice(0, limit),
+      ),
     } as unknown as ThoughtsRankingService;
     const eventsQueue = {
       add: jest.fn().mockResolvedValue({ id: 'job-1' }),
@@ -166,7 +169,7 @@ describe('ThoughtsService', () => {
     expect(page.thoughts).toHaveLength(1);
     expect(page.pageInfo).toEqual({
       hasMore: true,
-      nextCursor: '2026-09-14T11:00:00.000Z',
+      nextCursor: '2026-09-14T11:00:00.000Z_thought-1',
     });
   });
 
@@ -419,6 +422,301 @@ describe('ThoughtsService', () => {
       type: 'provider',
       avatarUrl: null,
       toliAvatarKey: null,
+    });
+  });
+
+  describe('For You pagination', () => {
+    type DbRow = {
+      id: string;
+      body: string;
+      status: string;
+      createdAt: Date;
+      authorId: string;
+      author: {
+        id: string;
+        publicUserId: string;
+        profile: {
+          username: string;
+          displayName: string;
+          avatarUrl: string | null;
+          profilePictureType: string;
+          toliAvatarKey: string | null;
+          interests: string[];
+          toliId: string | null;
+          toli: null;
+        };
+      };
+      _count: { likes: number; comments: number; shares: number };
+    };
+
+    const makeRows = (count: number, groups: number): DbRow[] => {
+      const rows: DbRow[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const group = i % groups;
+        rows.push({
+          id: `fy-${String(i).padStart(3, '0')}`,
+          body: `thought ${i}`,
+          status: 'active',
+          createdAt: new Date(Date.UTC(2026, 8, 1) + group * 3_600_000),
+          authorId: `author-${i % 30}`,
+          author: {
+            id: `author-${i % 30}`,
+            publicUserId: 'HT-AAAAAAAA',
+            profile: {
+              username: `author_${i % 30}`,
+              displayName: `Author ${i % 30}`,
+              avatarUrl: null,
+              profilePictureType: 'provider',
+              toliAvatarKey: null,
+              interests: [],
+              toliId: null,
+              toli: null,
+            },
+          },
+          _count: {
+            likes: (i * 7) % 50,
+            comments: (i * 3) % 5,
+            shares: (i * 11) % 7,
+          },
+        });
+      }
+      return rows;
+    };
+
+    // Faithful in-memory emulation of the Postgres keyset queries issued by
+    // listForYou: composite (createdAt, id) bounds, id in/notIn, authorId
+    // in/notIn, desc/desc ordering, take.
+    const installDb = (ctx: ReturnType<typeof createService>, rows: DbRow[]) => {
+      const { thought } = ctx;
+      const matches = (row: DbRow, where: Record<string, unknown>): boolean => {
+        if (where.status && row.status !== where.status) {
+          return false;
+        }
+        const created = where.createdAt as { lt?: Date } | undefined;
+        if (created?.lt && !(row.createdAt < created.lt)) {
+          return false;
+        }
+        const orClauses = where.OR as
+          | { createdAt?: { lt?: Date }; id?: { lt?: string } }[]
+          | undefined;
+        if (orClauses) {
+          const hit = orClauses.some((clause) => {
+            if (clause.createdAt?.lt) {
+              return row.createdAt < clause.createdAt.lt;
+            }
+            return (
+              row.createdAt.getTime() ===
+                (clause.createdAt as Date).getTime() &&
+              row.id < (clause.id?.lt ?? '')
+            );
+          });
+          if (!hit) {
+            return false;
+          }
+        }
+        const idFilter = where.id as
+          | { in?: string[]; notIn?: string[] }
+          | undefined;
+        if (idFilter?.in && !idFilter.in.includes(row.id)) {
+          return false;
+        }
+        if (idFilter?.notIn && idFilter.notIn.includes(row.id)) {
+          return false;
+        }
+        const authorFilter = where.authorId as
+          | { in?: string[]; notIn?: string[] }
+          | undefined;
+        if (authorFilter?.in && !authorFilter.in.includes(row.authorId)) {
+          return false;
+        }
+        if (authorFilter?.notIn && authorFilter.notIn.includes(row.authorId)) {
+          return false;
+        }
+        return true;
+      };
+
+      thought.findMany.mockImplementation((args: {
+        where: Record<string, unknown>;
+        take?: number;
+      }) => {
+        const matched = rows
+          .filter((row) => matches(row, args.where))
+          .sort((a, b) =>
+            b.createdAt.getTime() !== a.createdAt.getTime()
+              ? b.createdAt.getTime() - a.createdAt.getTime()
+              : b.id.localeCompare(a.id),
+          );
+        // Mirror Prisma: no take means no limit (the carried by-id fetch
+        // passes none).
+        return Promise.resolve(
+          args.take === undefined ? matched : matched.slice(0, args.take),
+        );
+      });
+      return rows;
+    };
+
+    const drainForYou = async (
+      service: ThoughtsService,
+      limit: string,
+    ) => {
+      let cursor: string | undefined;
+      let deferred: string | undefined;
+      const seen = new Map<string, unknown>();
+      let pages = 0;
+      while (true) {
+        const res = await service.listForYou(
+          'viewer-1',
+          cursor,
+          limit,
+          deferred,
+        );
+        pages += 1;
+        if (pages > 60) {
+          throw new Error('pagination did not terminate');
+        }
+        for (const item of res.thoughts) {
+          expect(seen.has(item.id)).toBe(false);
+          seen.set(item.id, item);
+        }
+        if (!res.pageInfo.hasMore) {
+          break;
+        }
+        cursor = res.pageInfo.nextCursor ?? undefined;
+        deferred =
+          res.deferred.length > 0 ? res.deferred.join(',') : undefined;
+      }
+      return { seen, pages };
+    };
+
+    it('drains 300 thoughts across pages with no skips or duplicates', async () => {
+      const ctx = createService();
+      const rows = installDb(ctx, makeRows(300, 10));
+
+      const { seen, pages } = await drainForYou(ctx.service, '20');
+
+      expect(seen.size).toBe(rows.length);
+      for (const row of rows) {
+        expect(seen.has(row.id)).toBe(true);
+      }
+      expect(pages).toBe(15);
+    });
+
+    it('serves identical-timestamp thoughts exactly once', async () => {
+      const ctx = createService();
+      // All 45 share one timestamp: ranking/dedup must rely on the id tiebreak.
+      const rows = installDb(ctx, makeRows(45, 1));
+
+      const { seen, pages } = await drainForYou(ctx.service, '20');
+
+      expect(seen.size).toBe(rows.length);
+      expect(pages).toBe(3);
+    });
+
+    it('drops newly hidden thoughts mid-pagination without dupes', async () => {
+      const ctx = createService();
+      const rows = installDb(ctx, makeRows(60, 6));
+      const hidden = new Set(['fy-021', 'fy-033', 'fy-044', 'fy-055', 'fy-059']);
+      const { thoughtHide } = ctx;
+      let calls = 0;
+      thoughtHide.findMany.mockImplementation(() => {
+        calls += 1;
+        // Hide five thoughts after the first page lands.
+        return Promise.resolve(
+          calls > 1
+            ? [...hidden].map((thoughtId) => ({ thoughtId }))
+            : [],
+        );
+      });
+
+      let cursor: string | undefined;
+      let deferred: string | undefined;
+      const seen = new Map<string, number>();
+      let pages = 0;
+      while (true) {
+        const res = await ctx.service.listForYou(
+          'viewer-1',
+          cursor,
+          '20',
+          deferred,
+        );
+        pages += 1;
+        if (pages > 60) {
+          throw new Error('pagination did not terminate');
+        }
+        for (const item of res.thoughts) {
+          expect(seen.has(item.id)).toBe(false);
+          seen.set(item.id, pages);
+        }
+        if (!res.pageInfo.hasMore) {
+          break;
+        }
+        cursor = res.pageInfo.nextCursor ?? undefined;
+        deferred =
+          res.deferred.length > 0 ? res.deferred.join(',') : undefined;
+      }
+
+      // Hidden thoughts may only have been served before the hide took
+      // effect (page 1); afterwards the carried set must drop them.
+      for (const id of hidden) {
+        if (seen.has(id)) {
+          expect(seen.get(id)).toBe(1);
+        }
+      }
+      expect(seen.size).toBeLessThanOrEqual(rows.length);
+    });
+
+    it('tolerates newly created thoughts between pages', async () => {
+      const ctx = createService();
+      const rows = installDb(ctx, makeRows(60, 6));
+
+      let cursor: string | undefined;
+      let deferred: string | undefined;
+      const seen = new Map<string, unknown>();
+      let pages = 0;
+      while (true) {
+        const res = await ctx.service.listForYou(
+          'viewer-1',
+          cursor,
+          '20',
+          deferred,
+        );
+        pages += 1;
+        if (pages > 60) {
+          throw new Error('pagination did not terminate');
+        }
+        for (const item of res.thoughts) {
+          expect(seen.has(item.id)).toBe(false);
+          seen.set(item.id, item);
+        }
+        if (pages === 1) {
+          // A brand-new thought lands after page one: newer than every
+          // cursor, so it must neither duplicate nor break the drain.
+          rows.push({
+            ...rows[0],
+            id: 'fy-new',
+            createdAt: new Date(Date.UTC(2026, 8, 2)),
+          });
+        }
+        if (!res.pageInfo.hasMore) {
+          break;
+        }
+        cursor = res.pageInfo.nextCursor ?? undefined;
+        deferred =
+          res.deferred.length > 0 ? res.deferred.join(',') : undefined;
+      }
+
+      for (const row of rows) {
+        if (row.id !== 'fy-new') {
+          expect(seen.has(row.id)).toBe(true);
+        }
+      }
+    });
+
+    it('rejects malformed cursors', async () => {
+      const { service } = createService();
+      await expect(
+        service.listForYou('viewer-1', 'not-a-date', '20'),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

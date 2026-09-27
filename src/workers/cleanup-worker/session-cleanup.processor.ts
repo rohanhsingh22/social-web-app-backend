@@ -30,14 +30,29 @@ export class SessionCleanupProcessor
   }
 
   async onModuleInit() {
-    await this.queue.upsertJobScheduler(
-      SESSION_CLEANUP_JOB,
-      { every: SESSION_CLEANUP_EVERY_MS },
-      { name: SESSION_CLEANUP_JOB, data: {} },
-    );
-    this.logger.log(
-      `Session cleanup scheduled every ${SESSION_CLEANUP_EVERY_MS}ms`,
-    );
+    // Fail-open: a Redis outage at boot must not crash the worker app.
+    // BullMQ reconnects on its own; the scheduler is (re)registered on the
+    // next successful boot.
+    try {
+      await this.queue.upsertJobScheduler(
+        SESSION_CLEANUP_JOB,
+        { every: SESSION_CLEANUP_EVERY_MS },
+        {
+          name: SESSION_CLEANUP_JOB,
+          data: {},
+          opts: { removeOnComplete: 50, removeOnFail: 50 },
+        },
+      );
+      this.logger.log(
+        `Session cleanup scheduled every ${SESSION_CLEANUP_EVERY_MS}ms`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Session cleanup scheduler unavailable: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
   }
 
   async process(job: Job): Promise<{ expired: number; revoked: number }> {

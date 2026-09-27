@@ -15,6 +15,11 @@ import { PrismaService } from "@app/core/prisma/prisma.service";
 import { ModerationService } from "@app/modules/moderation/moderation.service";
 import { profileCardSelect, toProfileCard } from "@app/common/profile-card";
 import {
+  formatPerfMs,
+  perfElapsedMs,
+  perfNow,
+} from "@app/common/perf";
+import {
   applyAvatarVisibility,
   fetchAvatarVisibility,
 } from "@app/common/avatar-visibility";
@@ -65,7 +70,7 @@ export class DirectMessagesService {
   ) {}
 
   async listConversations(userId: string) {
-    const start = Date.now();
+    const totalStart = perfNow();
     const memberships = await this.prisma.conversationMember.findMany({
       where: { userId },
       orderBy: { conversation: { updatedAt: "desc" } },
@@ -101,7 +106,7 @@ export class DirectMessagesService {
     });
 
     this.logger.debug(
-      `dm.listConversations user=${userId} count=${memberships.length} ${(Date.now() - start).toFixed(1)}ms`,
+      `dm.listConversations user=${userId} count=${memberships.length} total=${formatPerfMs(perfElapsedMs(totalStart))}`,
     );
 
     const avatars = await this.avatarVisibility(
@@ -128,13 +133,13 @@ export class DirectMessagesService {
     cursor?: string,
     limitValue?: string,
   ) {
-    const totalStart = Date.now();
-    const convStart = Date.now();
+    const totalStart = perfNow();
+    const convStart = perfNow();
     const conversation = await this.getConversationForUser(
       userId,
       conversationId,
     );
-    const convMs = Date.now() - convStart;
+    const convMs = perfElapsedMs(convStart);
 
     const limit = this.parseLimit(limitValue);
     // Access checks (user/block/connection) and the message page are
@@ -142,7 +147,7 @@ export class DirectMessagesService {
     // concurrently to save one sequential DB round trip. If the access
     // check rejects, the messages result is discarded and the error
     // propagates, so authorization is not weakened.
-    const restStart = Date.now();
+    const messagesStart = perfNow();
     const [messages] = await Promise.all([
       this.prisma.directMessage.findMany({
         where: {
@@ -169,16 +174,17 @@ export class DirectMessagesService {
       }),
       this.assertDirectConversationAccess(conversation, userId),
     ]);
-    const restMs = Date.now() - restStart;
+    const messagesMs = perfElapsedMs(messagesStart);
 
     const hasMore = messages.length > limit;
     const page = hasMore ? messages.slice(0, limit) : messages;
     const nextCursor = hasMore
       ? page[page.length - 1]?.createdAt.toISOString()
       : null;
+    const mapStart = perfNow();
 
     this.logger.debug(
-      `dm.getMessages conv=${conversationId} total=${(Date.now() - totalStart).toFixed(1)}ms convLoad=${convMs.toFixed(1)}ms checks+messages=${restMs.toFixed(1)}ms count=${page.length}`,
+      `dm.getMessages conv=${conversationId} total=${formatPerfMs(perfElapsedMs(totalStart))} convLoad=${formatPerfMs(convMs)} checks+messages=${formatPerfMs(messagesMs)} count=${page.length}`,
     );
 
     const avatars = await this.avatarVisibility(userId, [
@@ -186,7 +192,7 @@ export class DirectMessagesService {
       ...page.map((message) => message.sender.id),
     ]);
 
-    return {
+    const mapped = {
       conversation: this.mapConversation(conversation, userId, avatars),
       messages: page
         .reverse()
@@ -196,6 +202,11 @@ export class DirectMessagesService {
         nextCursor,
       },
     };
+    this.logger.debug(
+      `dm.getMessages conv=${conversationId} map=${formatPerfMs(perfElapsedMs(mapStart))}`,
+    );
+
+    return mapped;
   }
 
   async createMessage(userId: string, conversationId: string, body: string) {
@@ -447,14 +458,11 @@ export class DirectMessagesService {
   }
 
   private publicProfileSelect() {
+    // DM surfaces only need the identity card (name/photo/Toli): bio,
+    // ageGroup, region and languages are never rendered here.
     return {
       userId: true,
       ...profileCardSelect,
-      bio: true,
-      ageGroup: true,
-      region: true,
-      primaryLanguage: true,
-      languages: true,
     } satisfies Prisma.ProfileSelect;
   }
 

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Profile, Prisma } from '@prisma/client';
 import { PrismaService } from '@app/core/prisma/prisma.service';
+import { FanoutService } from '@app/realtime/fanout/fanout.service';
 import { ThoughtsService } from '@app/modules/thoughts/thoughts.service';
 import { isToliAvatarKeyForToli } from '@app/modules/toli/toli-avatars';
 import { ToliService } from '@app/modules/toli/toli.service';
@@ -35,6 +36,7 @@ export class ProfilesService {
     private readonly prisma: PrismaService,
     private readonly toliService: ToliService,
     private readonly thoughtsService: ThoughtsService,
+    private readonly fanout: FanoutService,
   ) {}
 
   async getOwnProfile(userId: string) {
@@ -418,6 +420,9 @@ export class ProfilesService {
     });
 
     this.logger.log(`Toli ${toliId ?? 'cleared'} for user ${userId}`);
+    // Realtime rooms are a separate process: tell gateways to evict this
+    // user's sockets from rooms they can no longer access.
+    void this.fanout.publishUserEvent([userId], 'toli:changed');
     return this.getOwnProfile(userId);
   }
 

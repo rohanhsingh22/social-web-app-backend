@@ -14,8 +14,14 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server } from 'socket.io';
+import type Redis from 'ioredis';
 import { ChannelsService } from '@app/modules/channels/channels.service';
+import { RedisService } from '@app/core/redis/redis.service';
 import { PresenceService } from '@app/realtime/presence/presence.service';
+import {
+  REALTIME_FANOUT_CHANNEL,
+  type FanoutUserEvent,
+} from '@app/realtime/fanout/fanout.service';
 import {
   RealtimeAuthService,
   RealtimeSocket,
@@ -55,12 +61,14 @@ export class ChannelGateway
   private readonly logger = new Logger(ChannelGateway.name);
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private sweepTimer?: ReturnType<typeof setInterval>;
+  private subscriber: Redis | null = null;
 
   constructor(
     private readonly auth: RealtimeAuthService,
     private readonly channels: ChannelsService,
     private readonly presence: PresenceService,
     private readonly rateLimit: RealtimeRateLimitService,
+    private readonly redis: RedisService,
   ) {}
 
   afterInit() {
@@ -72,6 +80,7 @@ export class ChannelGateway
       () => void this.sweepStalePresence(),
       SWEEP_INTERVAL_MS,
     );
+    void this.subscribeFanout();
   }
 
   onModuleDestroy() {
@@ -82,6 +91,8 @@ export class ChannelGateway
     if (this.sweepTimer) {
       clearInterval(this.sweepTimer);
     }
+
+    void this.unsubscribeFanout();
   }
 
   async handleConnection(socket: RealtimeSocket) {
@@ -222,16 +233,6 @@ export class ChannelGateway
       return { ok: false, code: 'AUTH_REQUIRED' };
     }
 
-    if (user.status === 'banned') {
-      socket.emit('user:banned', { code: 'USER_BANNED' });
-      return { ok: false, code: 'USER_BANNED' };
-    }
-
-    if (user.status === 'muted') {
-      socket.emit('user:muted', { code: 'USER_MUTED' });
-      return { ok: false, code: 'USER_MUTED' };
-    }
-
     const bodyText = body.body?.trim();
 
     if (!bodyText) {
@@ -283,15 +284,36 @@ export class ChannelGateway
       return { ok: false, code: 'RATE_LIMITED' };
     }
 
-    const message = await this.channels.persistChannelMessage(
-      channel.id,
-      user.id,
-      bodyText,
-    );
+    // Banned/muted status is enforced fresh inside persistChannelMessage:
+    // socket identity is captured at connect time and would otherwise go
+    // stale after a moderation action.
+    try {
+      const message = await this.channels.persistChannelMessage(
+        channel.id,
+        user.id,
+        bodyText,
+      );
 
-    this.server.to(`channel:${channel.id}`).emit('channel:message:new', message);
+      this.server
+        .to(`channel:${channel.id}`)
+        .emit('channel:message:new', message);
 
-    return { ok: true, message };
+      return { ok: true, message };
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        if (error.message === 'USER_BANNED') {
+          socket.emit('user:banned', { code: 'USER_BANNED' });
+          return { ok: false, code: 'USER_BANNED' };
+        }
+
+        if (error.message === 'USER_MUTED') {
+          socket.emit('user:muted', { code: 'USER_MUTED' });
+          return { ok: false, code: 'USER_MUTED' };
+        }
+      }
+
+      throw error;
+    }
   }
 
   private async resolveChannel(channelId: string) {
@@ -371,5 +393,147 @@ export class ChannelGateway
     this.server
       .to(`channel:${channelId}`)
       .emit('channel:presence:update', { channelId, online });
+  }
+
+  private async subscribeFanout(): Promise<void> {
+    try {
+      // A dedicated duplicate: a subscriber-mode connection cannot run
+      // commands, so the shared client must never subscribe.
+      const subscriber = this.redis.connection.duplicate();
+      if (subscriber.status !== 'ready') {
+        await subscriber.connect();
+      }
+      await subscriber.subscribe(REALTIME_FANOUT_CHANNEL);
+      subscriber.on('message', (channel, message) => {
+        if (channel === REALTIME_FANOUT_CHANNEL) {
+          void this.dispatchFanout(message);
+        }
+      });
+      subscriber.on('error', (error: Error) => {
+        this.logger.warn(`Fanout subscriber error: ${error.message}`);
+      });
+      this.subscriber = subscriber;
+      this.logger.log('Fanout subscriber established');
+    } catch (error) {
+      this.logger.warn(
+        `Fanout subscriber unavailable: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
+  private async unsubscribeFanout(): Promise<void> {
+    if (!this.subscriber) {
+      return;
+    }
+
+    try {
+      await this.subscriber.unsubscribe(REALTIME_FANOUT_CHANNEL);
+      await this.subscriber.quit();
+    } catch (error) {
+      this.logger.debug(
+        `Fanout subscriber teardown failed: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    } finally {
+      this.subscriber = null;
+    }
+  }
+
+  private async dispatchFanout(raw: string): Promise<void> {
+    let payload: FanoutUserEvent;
+
+    try {
+      payload = JSON.parse(raw) as FanoutUserEvent;
+    } catch {
+      return;
+    }
+
+    if (!payload || payload.event !== 'toli:changed') {
+      return;
+    }
+
+    for (const userId of payload.userIds ?? []) {
+      await this.evictStaleToliRooms(userId);
+    }
+  }
+
+  // A Toli change must cut off reads immediately, not just future sends:
+  // walk every local socket of the user and leave rooms they can no longer
+  // access (covers all tabs/devices via fetchSockets).
+  private async evictStaleToliRooms(userId: string): Promise<void> {
+    let sockets: Awaited<ReturnType<Server['fetchSockets']>>;
+
+    try {
+      sockets = await this.server.fetchSockets();
+    } catch (error) {
+      this.logger.debug(
+        `Toli eviction socket scan failed: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return;
+    }
+
+    for (const socket of sockets) {
+      // socket.data survives as plain JSON across instances (custom Sets do
+      // not), but adapter rooms transmit explicitly — use rooms for the room
+      // list and data only for the user identity.
+      const data = socket.data as Partial<RealtimeSocket['data']> | undefined;
+      const socketUserId =
+        typeof data?.user === 'object' && data.user !== null
+          ? (data.user as { id?: unknown }).id
+          : undefined;
+
+      if (socketUserId !== userId) {
+        continue;
+      }
+
+      const rooms: unknown = (socket as { rooms?: unknown }).rooms;
+      const roomNames: string[] = rooms instanceof Set
+        ? [...rooms].filter((room): room is string => typeof room === 'string')
+        : Array.isArray(rooms)
+          ? rooms.filter((room): room is string => typeof room === 'string')
+          : [];
+      const channelIds = roomNames
+        .filter((room) => room.startsWith('channel:'))
+        .map((room) => room.slice('channel:'.length));
+
+      for (const channelId of channelIds) {
+        let allowed = true;
+
+        try {
+          const channel = await this.resolveChannel(channelId);
+          allowed =
+            !!channel &&
+            (await this.channels.hasToliChannelAccess(userId, channel));
+        } catch {
+          allowed = false;
+        }
+
+        if (allowed) {
+          continue;
+        }
+
+        try {
+          await socket.leave(`channel:${channelId}`);
+        } catch {
+          // Best effort: the access check above already blocks reads/sends.
+        }
+        // Local tracking is a real Set; remote copies are fixed up when the
+        // kicked client leaves back (see the frontend kick handler).
+        if (data?.joinedChannelIds instanceof Set) {
+          data.joinedChannelIds.delete(channelId);
+        }
+        await this.presence.leaveChannel(channelId, userId);
+        await this.broadcastPresence(channelId);
+        socket.emit('channel:kicked', {
+          channelId,
+          code: 'TOLI_FORBIDDEN',
+        });
+      }
+    }
   }
 }

@@ -3,6 +3,7 @@ import { MessageStatus, ReportStatus, UserStatus } from '@prisma/client';
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { NotificationsService } from '@app/modules/notifications/notifications.service';
 import { ReportsService } from '@app/modules/reports/reports.service';
+import { ChannelsService } from '@app/modules/channels/channels.service';
 import { AdminService } from './admin.service';
 
 describe('AdminService', () => {
@@ -58,12 +59,27 @@ describe('AdminService', () => {
     const notifications = {
       legalNotice: jest.fn().mockResolvedValue({ id: 'notification-1' }),
     } as unknown as NotificationsService;
+    const channels = {
+      invalidateChannelMessageCache: jest.fn().mockResolvedValue(undefined),
+      invalidatePublicChannelCache: jest.fn(),
+    } as unknown as ChannelsService;
+    const authService = {
+      invalidateUserSessionsCache: jest.fn().mockResolvedValue(undefined),
+    };
 
     return {
-      service: new AdminService(prisma, reportsService, notifications),
+      service: new AdminService(
+        prisma,
+        reportsService,
+        notifications,
+        channels,
+        authService as never,
+      ),
       prisma,
       reportsService,
       notifications,
+      channels,
+      authService,
       tx,
     };
   };
@@ -84,8 +100,8 @@ describe('AdminService', () => {
     ).toThrow(BadRequestException);
   });
 
-  it('bans users, revokes sessions, and writes an audit action', async () => {
-    const { service, tx } = createService();
+  it('bans users, revokes sessions, and drops cached auth', async () => {
+    const { service, tx, authService } = createService();
     tx.user.update.mockResolvedValue({
       id: 'user-id',
       status: UserStatus.banned,
@@ -108,12 +124,16 @@ describe('AdminService', () => {
         reason: 'abuse',
       }),
     });
+    expect(authService.invalidateUserSessionsCache).toHaveBeenCalledWith(
+      'user-id',
+    );
   });
 
   it('soft-deletes channel messages with an audit action', async () => {
-    const { service, tx } = createService();
+    const { service, tx, channels } = createService();
     tx.channelMessage.update.mockResolvedValue({
       id: 'message-id',
+      channelId: 'channel-id',
       senderId: 'user-id',
       status: MessageStatus.deleted,
     });
@@ -127,6 +147,9 @@ describe('AdminService', () => {
         targetMessageId: 'message-id',
       }),
     });
+    expect(channels.invalidateChannelMessageCache).toHaveBeenCalledWith(
+      'channel-id',
+    );
   });
 
   it('hides missing direct messages as not found', async () => {

@@ -53,7 +53,12 @@ export class ThoughtsController {
     @Query() query: ThoughtFeedQueryDto,
   ) {
     return envelope(
-      await this.thoughtsService.listForYou(user.id, query.cursor, query.limit),
+      await this.thoughtsService.listForYou(
+        user.id,
+        query.cursor,
+        query.limit,
+        query.deferred,
+      ),
     );
   }
 

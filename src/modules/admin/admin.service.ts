@@ -17,6 +17,7 @@ import { PrismaService } from '@app/core/prisma/prisma.service';
 import { NotificationsService } from '@app/modules/notifications/notifications.service';
 import { ReportsService } from '@app/modules/reports/reports.service';
 import { AuthService } from '@app/modules/auth/auth.service';
+import { ChannelsService } from '@app/modules/channels/channels.service';
 import { AdminActionDto } from './dto/admin-action.dto';
 import { CreateBannedWordDto, UpdateBannedWordDto } from './dto/banned-word.dto';
 import { CreateChannelDto, UpdateChannelDto } from './dto/channel-admin.dto';
@@ -28,6 +29,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly reportsService: ReportsService,
     private readonly notifications: NotificationsService,
+    private readonly channels: ChannelsService,
     @Optional() private readonly authService?: AuthService,
   ) {}
 
@@ -127,8 +129,9 @@ export class AdminService {
     adminId: string,
     messageId: string,
     dto: AdminActionDto,
-  ) {    return this.prisma.$transaction(async (tx) => {
-      const message = await tx.channelMessage
+  ) {
+    const message = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.channelMessage
         .update({
           where: { id: messageId },
           data: {
@@ -144,13 +147,19 @@ export class AdminService {
       await this.audit(tx, {
         adminId,
         action: 'delete_channel_message',
-        targetUserId: message.senderId,
-        targetMessageId: message.id,
+        targetUserId: updated.senderId,
+        targetMessageId: updated.id,
         reason: dto.reason,
       });
 
-      return message;
+      return updated;
     });
+
+    // Evict cached first-pages so the soft-deleted message disappears
+    // immediately instead of lingering until TTL expiry.
+    await this.channels.invalidateChannelMessageCache(message.channelId);
+
+    return message;
   }
 
   async deleteDirectMessage(
@@ -282,7 +291,7 @@ export class AdminService {
       sortOrder: dto.sortOrder ?? 0,
     };
 
-    return this.prisma.$transaction(async (tx) => {
+    const channel = await this.prisma.$transaction(async (tx) => {
       if (data.isDefault) {
         await tx.channel.updateMany({
           where: { isDefault: true },
@@ -290,15 +299,20 @@ export class AdminService {
         });
       }
 
-      const channel = await tx.channel.create({ data });
+      const created = await tx.channel.create({ data });
       await this.audit(tx, {
         adminId,
         action: 'create_channel',
-        metadata: { channelId: channel.id },
+        metadata: { channelId: created.id },
       });
 
-      return channel;
+      return created;
     });
+
+    // Local metadata cache only; cross-instance entries expire via TTL.
+    this.channels.invalidatePublicChannelCache();
+
+    return channel;
   }
 
   async updateChannel(adminId: string, channelId: string, dto: UpdateChannelDto) {
@@ -324,7 +338,7 @@ export class AdminService {
       sortOrder: dto.sortOrder,
     };
 
-    return this.prisma.$transaction(async (tx) => {
+    const channel = await this.prisma.$transaction(async (tx) => {
       if (dto.isDefault) {
         await tx.channel.updateMany({
           where: { id: { not: channelId }, isDefault: true },
@@ -332,7 +346,7 @@ export class AdminService {
         });
       }
 
-      const channel = await tx.channel
+      const updated = await tx.channel
         .update({
           where: { id: channelId },
           data,
@@ -347,8 +361,14 @@ export class AdminService {
         metadata: { channelId },
       });
 
-      return channel;
+      return updated;
     });
+
+    // Visibility/isActive flips must not linger in metadata caches.
+    // Local instance is cleared now; other instances expire via TTL.
+    this.channels.invalidatePublicChannelCache();
+
+    return channel;
   }
 
   listBannedWords() {

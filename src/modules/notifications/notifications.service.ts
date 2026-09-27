@@ -176,6 +176,16 @@ export class NotificationsService {
     };
   }
 
+  async unreadCount(userId: string) {
+    // Dedicated cheap query for badges/polling: avoids transferring full
+    // pages when only the count is needed.
+    const count = await this.prisma.notification.count({
+      where: { recipientId: userId, readAt: null },
+    });
+
+    return { unreadCount: count };
+  }
+
   async markRead(userId: string, id: string) {
     const marked = await this.prisma.notification.updateMany({
       where: { id, recipientId: userId, readAt: null },
@@ -216,6 +226,32 @@ export class NotificationsService {
     return { ok: true, marked: marked.count };
   }
 
+  // Stable dedupe key per domain event so double submits and queue
+  // redeliveries collapse to one job instead of duplicate rows. Completed
+  // jobs age out after an hour, so genuinely repeated events (e.g. a
+  // re-request long after a cancel) still notify.
+  private dedupeKey(input: CreateNotificationInput): string | undefined {
+    const meta = (
+      typeof input.metadata === 'object' && input.metadata !== null
+        ? input.metadata
+        : {}
+    ) as Record<string, unknown>;
+    const target = [
+      meta.connectionId,
+      meta.messageId,
+      meta.conversationId,
+      meta.senderId,
+      meta.requesterId,
+      meta.userId,
+    ].find((value): value is string => typeof value === 'string' && value.length > 0);
+
+    if (!target) {
+      return undefined;
+    }
+
+    return `notif:${input.type}:${input.recipientId}:${target}`;
+  }
+
   // Feature-flow helpers never break the triggering request: delivery is
   // asynchronous (worker) with a synchronous fallback, and any failure is
   // logged, not thrown. The domain write already succeeded by the time
@@ -223,6 +259,7 @@ export class NotificationsService {
   private async createFailOpen(input: CreateNotificationInput) {
     if (this.queue) {
       try {
+        const jobId = this.dedupeKey(input);
         await this.queue.add(
           NOTIFICATION_CREATE_JOB,
           {
@@ -233,9 +270,10 @@ export class NotificationsService {
             metadata: input.metadata,
           } satisfies NotificationJobData,
           {
+            ...(jobId ? { jobId } : {}),
             attempts: 5,
             backoff: { type: 'exponential', delay: 2000 },
-            removeOnComplete: 100,
+            removeOnComplete: { age: 3600, count: 100 },
             removeOnFail: 1000,
           },
         );

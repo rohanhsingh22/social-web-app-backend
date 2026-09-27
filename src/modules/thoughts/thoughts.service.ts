@@ -171,7 +171,7 @@ export class ThoughtsService {
   async listFresh(viewerId: string, cursor?: string, limitValue?: string) {
     const totalStart = perfNow();
     const limit = this.parseLimit(limitValue);
-    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+    const cursorKey = cursor ? this.parseCursor(cursor) : undefined;
     const exclusionsStart = perfNow();
     const exclusions = await this.feedExclusions(viewerId);
     const exclusionsMs = perfElapsedMs(exclusionsStart);
@@ -180,7 +180,7 @@ export class ThoughtsService {
     const thoughts = await this.prisma.thought.findMany({
       where: {
         status: MessageStatus.active,
-        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+        ...this.createdBefore(cursorKey),
         ...exclusions,
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -197,7 +197,9 @@ export class ThoughtsService {
       thoughts,
       limit,
       thoughts.length > limit,
-      thoughts.length > limit ? this.oldestCursor(thoughts.slice(0, limit)) : null,
+      thoughts.length > limit
+        ? this.oldestCursorKey(thoughts.slice(0, limit))
+        : null,
     );
     this.logger.debug(
       `listFresh viewer=${viewerId} total=${formatPerfMs(perfElapsedMs(totalStart))} exclusions=${formatPerfMs(exclusionsMs)} pool=${formatPerfMs(poolMs)}`,
@@ -205,10 +207,16 @@ export class ThoughtsService {
     return result;
   }
 
-  async listForYou(viewerId: string, cursor?: string, limitValue?: string) {
+  async listForYou(
+    viewerId: string,
+    cursor?: string,
+    limitValue?: string,
+    deferredValue?: string,
+  ) {
     const totalStart = perfNow();
     const limit = this.parseLimit(limitValue);
-    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+    const cursorKey = cursor ? this.parseCursor(cursor) : undefined;
+    const deferredIds = this.parseDeferred(deferredValue);
     // exclusions (blocks/hides/reports) and viewer profile are independent:
     // run concurrently to save one sequential DB round trip.
     const preStart = perfNow();
@@ -221,21 +229,50 @@ export class ThoughtsService {
     ]);
     const preMs = perfElapsedMs(preStart);
 
+    // The combined ranking pool stays ~FOR_YOU_POOL_SIZE: top it up with
+    // fresh candidates older than the pool tail. Deferred ids (ranked but
+    // unserved on previous pages) are re-fetched by id with current
+    // exclusions applied, so no eligible thought is ever skipped.
+    const freshTake = Math.max(limit, FOR_YOU_POOL_SIZE - deferredIds.length);
     const poolStart = perfNow();
-    const pool = await this.prisma.thought.findMany({
-      where: {
-        status: MessageStatus.active,
-        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
-        ...exclusions,
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: FOR_YOU_POOL_SIZE,
-      include: {
-        author: { select: thoughtAuthorSelect },
-        _count: { select: thoughtCountsSelect },
-      },
-    });
+    const [fresh, carried] = await Promise.all([
+      this.prisma.thought.findMany({
+        where: {
+          status: MessageStatus.active,
+          ...this.createdBefore(cursorKey),
+          ...exclusions,
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: freshTake,
+        include: {
+          author: { select: thoughtAuthorSelect },
+          _count: { select: thoughtCountsSelect },
+        },
+      }),
+      deferredIds.length > 0
+        ? this.prisma.thought.findMany({
+            where: {
+              id: { in: deferredIds },
+              status: MessageStatus.active,
+              authorId: exclusions.authorId,
+              author: exclusions.author,
+            },
+            include: {
+              author: { select: thoughtAuthorSelect },
+              _count: { select: thoughtCountsSelect },
+            },
+          })
+        : [],
+    ]);
+    // Excluded ids (hidden/reported since the previous page) simply drop
+    // out of the carried set here.
+    const pool =
+      carried.length > 0
+        ? carried.filter((thought) => !exclusions.id.notIn.includes(thought.id))
+        : [];
+    pool.push(...fresh);
     const poolMs = perfElapsedMs(poolStart);
+    const freshExhausted = fresh.length < freshTake;
 
     const rankStart = perfNow();
     const ranked = this.ranking.rank(
@@ -256,30 +293,55 @@ export class ThoughtsService {
 
     const picked = this.ranking.applyAuthorDiversity(ranked, limit);
     const page = picked.map((item) => item.thought);
-    const hasMore = pool.length >= FOR_YOU_POOL_SIZE;
+
+    // The fresh range only moves forward (strictly older tails), and the
+    // remainder strictly drains once exhausted, so pagination always makes
+    // progress and can neither loop nor skip.
+    const nextTail =
+      fresh.length > 0
+        ? this.oldestCursorKey(fresh)
+        : cursorKey
+          ? this.formatCursorKey(cursorKey)
+          : null;
 
     const result = await this.toFeedPage(
       viewerId,
       page,
       limit,
-      hasMore,
-      hasMore ? this.oldestCursor(pool) : null,
+      // Provisionally true when the fresh range is not exhausted; corrected
+      // below against what was actually served.
+      !freshExhausted,
+      !freshExhausted ? nextTail : null,
     );
+    // Account deferred carry against what was ACTUALLY served (toFeedPage
+    // slices to the limit), never against pre-slice picks.
+    const servedIds = new Set(result.thoughts.map((thought) => thought.id));
+    const remainder = ranked
+      .filter((item) => !servedIds.has(item.thought.id))
+      .map((item) => item.thought.id);
+    const hasMore = !freshExhausted || remainder.length > 0;
     this.logger.debug(
-      `listForYou viewer=${viewerId} total=${formatPerfMs(perfElapsedMs(totalStart))} pre(excl+viewer)=${formatPerfMs(preMs)} pool=${formatPerfMs(poolMs)} rank=${formatPerfMs(rankMs)} poolSize=${pool.length}`,
+      `listForYou viewer=${viewerId} total=${formatPerfMs(perfElapsedMs(totalStart))} pre(excl+viewer)=${formatPerfMs(preMs)} pool=${formatPerfMs(poolMs)} rank=${formatPerfMs(rankMs)} poolSize=${pool.length} carried=${carried.length} deferred=${remainder.length}`,
     );
-    return result;
+    return {
+      thoughts: result.thoughts,
+      pageInfo: {
+        hasMore,
+        nextCursor: hasMore ? nextTail : null,
+      },
+      deferred: hasMore ? remainder : [],
+    };
   }
 
   async listMine(viewerId: string, cursor?: string, limitValue?: string) {
     const limit = this.parseLimit(limitValue);
-    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+    const cursorKey = cursor ? this.parseCursor(cursor) : undefined;
 
     const thoughts = await this.prisma.thought.findMany({
       where: {
         status: MessageStatus.active,
         authorId: viewerId,
-        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+        ...this.createdBefore(cursorKey),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -295,7 +357,7 @@ export class ThoughtsService {
       limit,
       thoughts.length > limit,
       thoughts.length > limit
-        ? this.oldestCursor(thoughts.slice(0, limit))
+        ? this.oldestCursorKey(thoughts.slice(0, limit))
         : null,
     );
   }
@@ -324,7 +386,7 @@ export class ThoughtsService {
     await this.assertNotBlocked(viewerId, target.id);
 
     const limit = this.parseLimit(limitValue);
-    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+    const cursorKey = cursor ? this.parseCursor(cursor) : undefined;
 
     // Your own tab shows everything you posted (even items you hid).
     // Other users' lists respect your hides/reports.
@@ -351,7 +413,7 @@ export class ThoughtsService {
       where: {
         status: MessageStatus.active,
         authorId: target.id,
-        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+        ...this.createdBefore(cursorKey),
         ...(excludedIds.length > 0 ? { id: { notIn: excludedIds } } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -368,7 +430,7 @@ export class ThoughtsService {
       limit,
       thoughts.length > limit,
       thoughts.length > limit
-        ? this.oldestCursor(thoughts.slice(0, limit))
+        ? this.oldestCursorKey(thoughts.slice(0, limit))
         : null,
     );
 
@@ -380,7 +442,7 @@ export class ThoughtsService {
 
   async listConnections(viewerId: string, cursor?: string, limitValue?: string) {
     const limit = this.parseLimit(limitValue);
-    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+    const cursorKey = cursor ? this.parseCursor(cursor) : undefined;
 
     const links = await this.prisma.connection.findMany({
       where: {
@@ -406,7 +468,7 @@ export class ThoughtsService {
     const thoughts = await this.prisma.thought.findMany({
       where: {
         status: MessageStatus.active,
-        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+        ...this.createdBefore(cursorKey),
         ...exclusions,
         authorId: { in: connectedIds, ...exclusions.authorId },
       },
@@ -424,7 +486,7 @@ export class ThoughtsService {
       limit,
       thoughts.length > limit,
       thoughts.length > limit
-        ? this.oldestCursor(thoughts.slice(0, limit))
+        ? this.oldestCursorKey(thoughts.slice(0, limit))
         : null,
     );
   }
@@ -604,7 +666,7 @@ export class ThoughtsService {
     limitValue?: string,
   ) {
     const limit = this.parseLimit(limitValue);
-    const cursorDate = cursor ? this.parseCursor(cursor) : undefined;
+    const cursorKey = cursor ? this.parseCursor(cursor) : undefined;
     const thought = await this.activeThoughtOrThrow(id);
     await this.assertNotBlocked(viewerId, thought.authorId);
 
@@ -612,7 +674,7 @@ export class ThoughtsService {
       where: {
         thoughtId: id,
         status: MessageStatus.active,
-        ...(cursorDate ? { createdAt: { lt: cursorDate } } : {}),
+        ...this.createdBefore(cursorKey),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -631,14 +693,14 @@ export class ThoughtsService {
         this.toCommentDto(comment, avatars.get(comment.author.id) ?? true),
       );
 
+    const last = page[page.length - 1];
     return {
       thoughtId: id,
       comments: items,
       pageInfo: {
         hasMore,
-        nextCursor: hasMore
-          ? page[page.length - 1]?.createdAt.toISOString() ?? null
-          : null,
+        nextCursor:
+          hasMore && last ? this.oldestCursorKey([last]) : null,
       },
     };
   }
@@ -720,16 +782,61 @@ export class ThoughtsService {
     };
   }
 
-  private oldestCursor(thoughts: { createdAt: Date }[]): string | null {
+  // Composite pagination key (createdAt, id) matching
+  // orderBy [{ createdAt: 'desc' }, { id: 'desc' }]. The id tiebreak keeps
+  // pagination correct when many rows share a timestamp; the string form
+  // stays opaque to clients.
+  private formatCursorKey(key: { date: Date; id?: string }): string {
+    return key.id
+      ? `${key.date.toISOString()}_${key.id}`
+      : key.date.toISOString();
+  }
+
+  private oldestCursorKey(
+    thoughts: { createdAt: Date; id: string }[],
+  ): string | null {
     if (thoughts.length === 0) {
       return null;
     }
 
     const oldest = thoughts.reduce((min, thought) =>
-      thought.createdAt < min.createdAt ? thought : min,
+      thought.createdAt < min.createdAt ||
+      (thought.createdAt.getTime() === min.createdAt.getTime() &&
+        thought.id < min.id)
+        ? thought
+        : min,
     );
 
-    return oldest.createdAt.toISOString();
+    return this.formatCursorKey({ date: oldest.createdAt, id: oldest.id });
+  }
+
+  private createdBefore(key?: { date: Date; id?: string }) {
+    if (!key) {
+      return {};
+    }
+
+    if (!key.id) {
+      return { createdAt: { lt: key.date } };
+    }
+
+    return {
+      OR: [
+        { createdAt: { lt: key.date } },
+        { createdAt: key.date, id: { lt: key.id } },
+      ],
+    };
+  }
+
+  private parseDeferred(value?: string, cap = 500): string[] {
+    if (!value) {
+      return [];
+    }
+
+    const ids = [...new Set(value.split(',').map((id) => id.trim()))].filter(
+      (id) => id.length > 0,
+    );
+
+    return ids.slice(0, cap);
   }
 
   private async recordImpressions(
@@ -1022,14 +1129,23 @@ export class ThoughtsService {
     return Math.min(limit, MAX_FEED_LIMIT);
   }
 
-  private parseCursor(cursor: string) {
-    const date = new Date(cursor);
+  private parseCursor(cursor: string): { date: Date; id?: string } {
+    // Composite cursors look like `<iso>_<id>` (uuids contain no
+    // underscores); plain ISO dates remain accepted.
+    const separator = cursor.lastIndexOf('_');
+    const datePart = separator > 0 ? cursor.slice(0, separator) : cursor;
+    const idPart = separator > 0 ? cursor.slice(separator + 1) : '';
+    const date = new Date(datePart);
 
     if (Number.isNaN(date.getTime())) {
       throw new BadRequestException('INVALID_CURSOR');
     }
 
-    return date;
+    if (separator <= 0 || idPart.length === 0) {
+      return { date };
+    }
+
+    return { date, id: idPart };
   }
 
   private isUniqueConflict(error: unknown): boolean {

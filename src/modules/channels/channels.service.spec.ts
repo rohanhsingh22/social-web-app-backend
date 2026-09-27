@@ -13,6 +13,7 @@ describe('ChannelsService', () => {
     };
     const channelMessage = {
       findMany: jest.fn(),
+      create: jest.fn(),
     };
     const profile = {
       findUnique: jest.fn(),
@@ -21,12 +22,19 @@ describe('ChannelsService', () => {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue('OK'),
       del: jest.fn().mockResolvedValue(1),
+      incr: jest.fn().mockResolvedValue(1),
+      expire: jest.fn().mockResolvedValue(1),
     };
+    const user = {
+      findUnique: jest.fn(),
+    };
+    const userSettings = { findMany: jest.fn().mockResolvedValue([]) };
     const prisma = {
       channel,
       channelMessage,
       profile,
-      userSettings: { findMany: jest.fn().mockResolvedValue([]) },
+      user,
+      userSettings,
     } as unknown as PrismaService;
     const config = {
       get: jest.fn().mockReturnValue('http://localhost:3000'),
@@ -44,6 +52,7 @@ describe('ChannelsService', () => {
       channel,
       channelMessage,
       profile,
+      user,
       redisConnection,
       moderation,
     };
@@ -356,6 +365,26 @@ describe('ChannelsService', () => {
     );
   });
 
+  it('rejects sends from banned or muted users with a fresh status check', async () => {
+    const { service, user } = createService();
+    user.findUnique.mockResolvedValue({ id: 'user-9', status: 'banned' });
+
+    await expect(
+      service.persistChannelMessage('channel-1', 'user-9', 'hello'),
+    ).rejects.toThrow('USER_BANNED');
+
+    user.findUnique.mockResolvedValue({ id: 'user-9', status: 'muted' });
+
+    await expect(
+      service.persistChannelMessage('channel-1', 'user-9', 'hello'),
+    ).rejects.toThrow('USER_MUTED');
+
+    expect(user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'user-9' },
+      select: { id: true, status: true },
+    });
+  });
+
   it('requires a Toli before resolving the personal Toli room', async () => {
     const { service, profile } = createService();
     profile.findUnique.mockResolvedValue({ toliId: null });
@@ -401,6 +430,133 @@ describe('ChannelsService', () => {
     await expect(
       service.hasToliChannelAccess('user-1', { toliId: 'vector-id' }),
     ).resolves.toBe(false);
+  });
+
+  it('never serves a stale write that lands after an invalidation', async () => {
+    // Map-backed Redis double with real incr semantics.
+    const store = new Map<string, string>();
+    const counters = new Map<string, number>();
+    const redisConnection = {
+      get: jest.fn((key: string) =>
+        Promise.resolve(store.has(key) ? (store.get(key) as string) : null),
+      ),
+      set: jest.fn((key: string, value: string) => {
+        store.set(key, value);
+        return Promise.resolve('OK');
+      }),
+      del: jest.fn((...keys: string[]) => {
+        let removed = 0;
+        for (const key of keys) {
+          if (store.delete(key)) {
+            removed += 1;
+          }
+        }
+        return Promise.resolve(removed);
+      }),
+      incr: jest.fn((key: string) => {
+        // Real Redis persists the counter so later GETs observe it.
+        const current = store.has(key)
+          ? Number(store.get(key))
+          : (counters.get(key) ?? 0);
+        const next = current + 1;
+        counters.set(key, next);
+        store.set(key, String(next));
+        return Promise.resolve(next);
+      }),
+      expire: jest.fn(() => Promise.resolve(1)),
+    };
+    const channel = { findMany: jest.fn(), findFirst: jest.fn() };
+    const channelMessage = { findMany: jest.fn(), create: jest.fn() };
+    const prisma = {
+      channel,
+      channelMessage,
+      profile: { findUnique: jest.fn() },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'user-2', status: 'active' }),
+      },
+      userSettings: { findMany: jest.fn().mockResolvedValue([]) },
+    } as unknown as PrismaService;
+    const config = {
+      get: jest.fn().mockReturnValue('http://localhost:3000'),
+    } as unknown as ConfigService;
+    const redis = { connection: redisConnection } as unknown as RedisService;
+    const moderation = {
+      assertMessageAllowed: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModerationService;
+    const service = new ChannelsService(prisma, config, redis, moderation);
+
+    const senderProfile = {
+      username: 'one',
+      displayName: 'One',
+      avatarUrl: null,
+      profilePictureType: 'provider',
+      toliAvatarKey: null,
+      toli: null,
+    };
+    const messageOne = {
+      id: 'message-1',
+      channelId: 'channel-id',
+      senderId: 'user-1',
+      body: 'hello',
+      status: 'active',
+      createdAt: new Date('2026-05-16T06:01:00.000Z'),
+      deletedAt: null,
+      deletedBy: null,
+      sender: { id: 'user-1', publicUserId: 'HT-AAAA', profile: senderProfile },
+    };
+    const messageTwo = {
+      ...messageOne,
+      id: 'message-2',
+      senderId: 'user-2',
+      body: 'hello again',
+      createdAt: new Date('2026-05-16T06:02:00.000Z'),
+      sender: {
+        id: 'user-2',
+        publicUserId: 'HT-BBBB',
+        profile: senderProfile,
+      },
+    };
+    channel.findFirst.mockResolvedValue({ id: 'channel-id', slug: 'general' });
+
+    // Request A misses the cache and stalls inside its DB read. The gate
+    // proves A's generation was captured BEFORE B invalidates (in
+    // production this ordering comes from real DB latency).
+    let releaseDb!: (rows: unknown[]) => void;
+    let dbStarted!: () => void;
+    const dbStartedGate = new Promise<void>((resolve) => {
+      dbStarted = resolve;
+    });
+    const slowDb = new Promise<unknown[]>((resolve) => {
+      releaseDb = resolve;
+    });
+    channelMessage.findMany.mockImplementationOnce(() => {
+      dbStarted();
+      return slowDb;
+    });
+    const pendingFirst = service.getMessages('general', undefined, '50');
+    await dbStartedGate;
+
+    // Request B publishes a new message (bumps the cache generation).
+    channelMessage.create.mockResolvedValue(messageTwo);
+    channelMessage.findMany.mockImplementation((args: { take?: number }) =>
+      Promise.resolve([messageTwo, messageOne].slice(0, args.take ?? 100)),
+    );
+    await service.createMessage('channel-id', 'user-2', 'hello again');
+
+    // Request A's stale DB result lands AFTER the invalidation.
+    releaseDb([messageOne]);
+    const staleServed = await pendingFirst;
+    expect(staleServed.messages.map((m) => m.id)).toEqual(['message-1']);
+
+    // The stale write is fire-and-forget: wait until it lands, then prove
+    // it went to the abandoned generation.
+    for (let i = 0; i < 100 && ![...store.keys()].some((k) => k.includes(':g0:')); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const staleKeys = [...store.keys()].filter((key) => key.includes(':g0:'));
+    expect(staleKeys.length).toBeGreaterThan(0);
+    const fresh = await service.getMessages('general', undefined, '50');
+    expect(fresh.messages.map((m) => m.id)).toEqual(['message-1', 'message-2']);
   });
 
   it('ignores non-UUID values for Toli channel lookup', async () => {

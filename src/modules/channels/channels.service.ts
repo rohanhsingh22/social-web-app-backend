@@ -6,7 +6,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Channel, ChannelType, MessageStatus } from '@prisma/client';
+import {
+  Channel,
+  ChannelType,
+  MessageStatus,
+  UserStatus,
+} from '@prisma/client';
 import { profileCardSelect, toProfileCard } from '@app/common/profile-card';
 import { fetchAvatarVisibility } from '@app/common/avatar-visibility';
 import { PrismaService } from '@app/core/prisma/prisma.service';
@@ -17,6 +22,9 @@ const DEFAULT_MESSAGE_LIMIT = 50;
 const MAX_MESSAGE_LIMIT = 100;
 const CHANNEL_CACHE_TTL_MS = 30_000;
 const MESSAGE_CACHE_TTL_SECONDS = 30;
+// Generations long outlive data entries (30s): a reset generation can never
+// collide with a live data key because idle channels hold no live keys.
+const MESSAGE_CACHE_GENERATION_TTL_SECONDS = 86_400;
 
 type CacheEntry<T> = {
   value: T;
@@ -344,6 +352,21 @@ export class ChannelsService {
     senderId: string,
     body: string,
   ) {
+    // Fresh status on every send: socket identity is captured at connect
+    // time, so a ban/mute issued afterwards must still take effect here.
+    const sender = await this.prisma.user.findUnique({
+      where: { id: senderId },
+      select: { id: true, status: true },
+    });
+
+    if (!sender || sender.status === UserStatus.banned) {
+      throw new ForbiddenException('USER_BANNED');
+    }
+
+    if (sender.status === UserStatus.muted) {
+      throw new ForbiddenException('USER_MUTED');
+    }
+
     await this.moderation.assertMessageAllowed(body);
 
     try {
@@ -374,7 +397,7 @@ export class ChannelsService {
       const result = this.mapMessageWithProfileUrl(message, avatars);
       // Await invalidation so an immediate GET after a send cannot hit the
       // stale Redis first-page (30s TTL) and miss the new message.
-      await this.invalidateMessageCache(channelId);
+      await this.invalidateChannelMessageCache(channelId);
       return result;
     } catch (error) {
       this.logger.error(
@@ -421,6 +444,12 @@ export class ChannelsService {
       ordered = cached.messages;
       pageInfo = cached.pageInfo;
     } else {
+      // Capture the generation BEFORE the DB read: if an invalidation bumps
+      // it mid-flight, our write lands on the abandoned generation and can
+      // never poison fresh readers (the A-miss/B-write/A-write race).
+      const generation = !cursor
+        ? await this.messageCacheGeneration(channel.id)
+        : null;
       const messages = await this.prisma.channelMessage.findMany({
         where: {
           channelId: channel.id,
@@ -463,8 +492,8 @@ export class ChannelsService {
       // Chronological for clients; kept raw here so the cache stores rows.
       ordered = page.reverse();
 
-      if (!cursor) {
-        void this.writeMessageCache(channel.id, limit, {
+      if (!cursor && generation !== null) {
+        void this.writeMessageCache(channel.id, limit, generation, {
           channel,
           messages: ordered,
           pageInfo,
@@ -566,10 +595,29 @@ export class ChannelsService {
     };
   }
 
-  private messageCacheKey(channelId: string, limit: number) {
-    // v2: v1 stored already-mapped cards, which double-mapping corrupted
-    // (Toli avatars lost). v1 entries are orphaned and expire naturally.
-    return `cache:channels:${channelId}:messages:latest:v2:${limit}`;
+  private messageCacheGenerationKey(channelId: string) {
+    return `cache:channels:${channelId}:messages:gen`;
+  }
+
+  private messageCacheKey(
+    channelId: string,
+    limit: number,
+    generation: string,
+  ) {
+    // v3: generation-scoped. v1/v2 entries are orphaned and expire naturally.
+    return `cache:channels:${channelId}:messages:latest:v3:g${generation}:${limit}`;
+  }
+
+  private async messageCacheGeneration(channelId: string): Promise<string> {
+    try {
+      return (
+        (await this.redis.connection.get(
+          this.messageCacheGenerationKey(channelId),
+        )) ?? '0'
+      );
+    } catch {
+      return '0';
+    }
   }
 
   private async readMessageCache(
@@ -577,8 +625,9 @@ export class ChannelsService {
     limit: number,
   ): Promise<RawMessagePage | null> {
     try {
+      const generation = await this.messageCacheGeneration(channelId);
       const raw = await this.redis.connection.get(
-        this.messageCacheKey(channelId, limit),
+        this.messageCacheKey(channelId, limit, generation),
       );
 
       if (!raw) {
@@ -613,11 +662,12 @@ export class ChannelsService {
   private async writeMessageCache(
     channelId: string,
     limit: number,
+    generation: string,
     page: RawMessagePage,
   ) {
     try {
       await this.redis.connection.set(
-        this.messageCacheKey(channelId, limit),
+        this.messageCacheKey(channelId, limit, generation),
         JSON.stringify(page),
         'EX',
         MESSAGE_CACHE_TTL_SECONDS,
@@ -631,12 +681,18 @@ export class ChannelsService {
     }
   }
 
-  private async invalidateMessageCache(channelId: string) {
+  // Bumping the generation retires every cached first-page at once (old
+  // generations orphan-expire via TTL). Atomic across API instances, and
+  // cheaper than deleting one key per supported limit.
+  async invalidateChannelMessageCache(channelId: string) {
     try {
-      const keys = Array.from({ length: MAX_MESSAGE_LIMIT }, (_, index) =>
-        this.messageCacheKey(channelId, index + 1),
+      await this.redis.connection.incr(
+        this.messageCacheGenerationKey(channelId),
       );
-      await this.redis.connection.del(...keys);
+      await this.redis.connection.expire(
+        this.messageCacheGenerationKey(channelId),
+        MESSAGE_CACHE_GENERATION_TTL_SECONDS,
+      );
     } catch (error) {
       this.logger.debug(
         `Message cache invalidation failed for channel ${channelId}: ${

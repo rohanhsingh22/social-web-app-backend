@@ -1,3 +1,4 @@
+import { ForbiddenException } from "@nestjs/common";
 import {
   ConnectedSocket,
   MessageBody,
@@ -139,11 +140,25 @@ export class DirectMessageGateway
       return { ok: false, code: "RATE_LIMITED" };
     }
 
-    const result = await this.directMessages.createMessage(
-      user.id,
-      body.conversationId,
-      body.body,
-    );
+    // createMessage re-checks membership, blocks, connection and sender
+    // status against fresh rows: map denials to ack codes the client
+    // understands instead of leaking raw exceptions.
+    let result: Awaited<
+      ReturnType<DirectMessagesService["createMessage"]>
+    >;
+    try {
+      result = await this.directMessages.createMessage(
+        user.id,
+        body.conversationId,
+        body.body,
+      );
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        socket.emit("dm:error", { code: error.message });
+        return { ok: false, code: error.message };
+      }
+      throw error;
+    }
 
     this.server
       .to(`dm:${body.conversationId}`)

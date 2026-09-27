@@ -30,6 +30,13 @@ export class NotificationsController {
     );
   }
 
+  @Get('unread-count')
+  async unreadCount(@CurrentUser() user: AuthenticatedUser) {
+    return envelope(
+      await this.notificationsService.unreadCount(user.id),
+    );
+  }
+
   @Post('read')
   async markAllRead(
     @CurrentUser() user: AuthenticatedUser,

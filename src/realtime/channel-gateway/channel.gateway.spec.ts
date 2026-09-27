@@ -1,5 +1,7 @@
+import { ForbiddenException } from '@nestjs/common';
 import { ChannelGateway } from './channel.gateway';
 import { ChannelsService } from '@app/modules/channels/channels.service';
+import { RedisService } from '@app/core/redis/redis.service';
 import { PresenceService } from '@app/realtime/presence/presence.service';
 import { RealtimeAuthService } from '@app/realtime/realtime-auth/realtime-auth.service';
 import { RealtimeRateLimitService } from '@app/realtime/realtime-rate-limit/realtime-rate-limit.service';
@@ -36,8 +38,18 @@ describe('ChannelGateway', () => {
     const rateLimit = {
       checkChannelMessage,
     } as unknown as RealtimeRateLimitService;
+    const subscriber = {
+      status: 'ready',
+      subscribe: jest.fn(),
+      unsubscribe: jest.fn(),
+      quit: jest.fn(),
+      on: jest.fn(),
+    };
+    const redis = {
+      connection: { duplicate: jest.fn().mockReturnValue(subscriber) },
+    } as unknown as RedisService;
 
-    const gateway = new ChannelGateway(auth, channels, presence, rateLimit);
+    const gateway = new ChannelGateway(auth, channels, presence, rateLimit, redis);
     gateway.server = {
       to: jest.fn().mockReturnValue({ emit: jest.fn() }),
     } as unknown as ChannelGateway['server'];
@@ -53,19 +65,33 @@ describe('ChannelGateway', () => {
       markOffline,
       joinChannel,
       leaveChannel,
+      onlineCount,
       checkChannelMessage,
     };
+  };
+
+  const createJoinedSocket = (
+    user: RealtimeSocket['data']['user'],
+    channelIds: string[] = [],
+  ) => {
+    const socket = createSocket(user);
+    for (const channelId of channelIds) {
+      socket.data.joinedChannelIds.add(channelId);
+      (socket.rooms as Set<string>).add(`channel:${channelId}`);
+    }
+    return socket;
   };
 
   const createSocket = (user?: RealtimeSocket['data']['user']) => {
     const joinedChannelIds = new Set<string>();
     const socket = {
       data: { user, isGuest: !user, joinedChannelIds },
+      rooms: new Set<string>(),
       emit: jest.fn(),
       join: jest.fn(),
       leave: jest.fn(),
       disconnect: jest.fn(),
-    } as unknown as RealtimeSocket;
+    } as unknown as RealtimeSocket & { rooms: Set<string> };
 
     return socket;
   };
@@ -274,5 +300,91 @@ describe('ChannelGateway', () => {
       expect.objectContaining({ code: 'TOLI_FORBIDDEN' }),
     );
     expect(persistChannelMessage).not.toHaveBeenCalled();
+  });
+
+  it('maps fresh USER_BANNED enforcement to the banned event and ack', async () => {
+    const { gateway, getBySlugOrId, persistChannelMessage, checkChannelMessage } =
+      createGateway();
+    getBySlugOrId.mockResolvedValue({ id: 'channel-1', toliId: null });
+    checkChannelMessage.mockResolvedValue({ allowed: true });
+    persistChannelMessage.mockRejectedValue(
+      new ForbiddenException('USER_BANNED'),
+    );
+    const socket = createSocket({
+      id: 'user-1',
+      status: 'active',
+      role: 'user',
+    });
+
+    await expect(
+      gateway.sendChannelMessage(socket, {
+        channelId: 'channel-1',
+        body: 'hello',
+      }),
+    ).resolves.toEqual({ ok: false, code: 'USER_BANNED' });
+    expect(socket.emit).toHaveBeenCalledWith(
+      'user:banned',
+      expect.objectContaining({ code: 'USER_BANNED' }),
+    );
+  });
+
+  it('evicts sockets from Toli rooms they can no longer access', async () => {
+    const { gateway, getBySlugOrId, hasToliChannelAccess, leaveChannel } =
+      createGateway();
+    getBySlugOrId.mockImplementation((slug: string) => {
+      if (slug === 'old-room-id') {
+        return Promise.resolve({ id: 'old-room-id', toliId: 'old-toli' });
+      }
+      return Promise.resolve({ id: 'general', toliId: null });
+    });
+    // Old Toli room: forbidden. Public room: hasToliChannelAccess true.
+    hasToliChannelAccess.mockImplementation(
+      (_userId: string, channel: { toliId: string | null }) =>
+        Promise.resolve(channel.toliId !== 'old-toli'),
+    );
+    const socket = createJoinedSocket(
+      { id: 'user-1', status: 'active', role: 'user' },
+      ['old-room-id', 'general'],
+    );
+    gateway.server = {
+      fetchSockets: jest.fn().mockResolvedValue([socket]),
+      to: jest.fn().mockReturnValue({ emit: jest.fn() }),
+    } as unknown as ChannelGateway['server'];
+
+    await (gateway as unknown as {
+      evictStaleToliRooms: (userId: string) => Promise<void>;
+    }).evictStaleToliRooms('user-1');
+
+    expect(socket.leave).toHaveBeenCalledWith('channel:old-room-id');
+    expect(socket.leave).not.toHaveBeenCalledWith('channel:general');
+    expect(socket.data.joinedChannelIds.has('old-room-id')).toBe(false);
+    expect(socket.data.joinedChannelIds.has('general')).toBe(true);
+    expect(leaveChannel).toHaveBeenCalledWith('old-room-id', 'user-1');
+    expect(socket.emit).toHaveBeenCalledWith(
+      'channel:kicked',
+      expect.objectContaining({
+        channelId: 'old-room-id',
+        code: 'TOLI_FORBIDDEN',
+      }),
+    );
+  });
+
+  it('leaves other users sockets alone during eviction', async () => {
+    const { gateway } = createGateway();
+    const other = createJoinedSocket(
+      { id: 'user-2', status: 'active', role: 'user' },
+      ['old-room-id'],
+    );
+    gateway.server = {
+      fetchSockets: jest.fn().mockResolvedValue([other]),
+      to: jest.fn().mockReturnValue({ emit: jest.fn() }),
+    } as unknown as ChannelGateway['server'];
+
+    await (gateway as unknown as {
+      evictStaleToliRooms: (userId: string) => Promise<void>;
+    }).evictStaleToliRooms('user-1');
+
+    expect(other.leave).not.toHaveBeenCalled();
+    expect(other.data.joinedChannelIds.has('old-room-id')).toBe(true);
   });
 });

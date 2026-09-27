@@ -8,7 +8,8 @@ export const REALTIME_FANOUT_CHANNEL = 'realtime:fanout';
 
 export type FanoutUserEvent =
   | { event: 'connection:changed'; userIds: string[] }
-  | { event: 'notification:new'; userIds: string[] };
+  | { event: 'notification:new'; userIds: string[] }
+  | { event: 'toli:changed'; userIds: string[] };
 
 @Injectable()
 export class FanoutService {

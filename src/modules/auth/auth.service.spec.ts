@@ -220,6 +220,63 @@ describe('AuthService', () => {
     expect(sessionFindUnique).toHaveBeenCalled();
   });
 
+  it('drops cached auth on logout so the old token fails closed', async () => {
+    const { verifyAsync, sessionFindUnique, sessionUpdate } = createService();
+    const redisDel = jest.fn().mockResolvedValue(1);
+    const redisService = {
+      connection: {
+        get: jest.fn().mockResolvedValue(null),
+        set: jest.fn().mockResolvedValue('OK'),
+        del: redisDel,
+      },
+    };
+    const config = {
+      get: jest.fn(),
+      getOrThrow: jest.fn(),
+    } as unknown as ConfigService;
+    const prisma = {
+      session: {
+        findUnique: sessionFindUnique,
+        update: sessionUpdate,
+      },
+    } as unknown as PrismaService;
+    const cachedService = new AuthService(
+      config,
+      { verifyAsync } as unknown as JwtService,
+      prisma,
+      {} as unknown as SessionService,
+      redisService as never,
+    );
+    verifyAsync.mockResolvedValue({
+      id: 'user-1',
+      sessionId: VALID_SESSION_ID,
+    });
+    sessionFindUnique.mockResolvedValue({
+      id: VALID_SESSION_ID,
+      revokedAt: null,
+      expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      user: { id: 'user-1', status: 'active', role: 'user' },
+    });
+    sessionUpdate.mockResolvedValue({});
+
+    // First verify populates L1+L2; logout must evict both.
+    await expect(
+      cachedService.verifyAccessToken('access-token'),
+    ).resolves.toEqual({ id: 'user-1', status: 'active', role: 'user' });
+    await cachedService.logout(VALID_REFRESH_TOKEN);
+    expect(redisDel).toHaveBeenCalledWith(
+      `auth:session:${VALID_SESSION_ID}`,
+    );
+
+    // L1 is gone: the next verify goes back to Redis/DB instead of the
+    // in-process entry.
+    sessionFindUnique.mockClear();
+    await expect(
+      cachedService.verifyAccessToken('access-token'),
+    ).resolves.toEqual({ id: 'user-1', status: 'active', role: 'user' });
+    expect(sessionFindUnique).toHaveBeenCalled();
+  });
+
   it('rejects banned users from cache', async () => {
     const { verifyAsync } = createService();
     const redisService = {

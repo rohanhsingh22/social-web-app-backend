@@ -99,6 +99,19 @@ describe('NotificationsService', () => {
     });
   });
 
+  it('serves the unread count without listing rows', async () => {
+    const { service, notification } = createService();
+    notification.count.mockResolvedValue(3);
+
+    await expect(service.unreadCount('user-1')).resolves.toEqual({
+      unreadCount: 3,
+    });
+    expect(notification.count).toHaveBeenCalledWith({
+      where: { recipientId: 'user-1', readAt: null },
+    });
+    expect(notification.findMany).not.toHaveBeenCalled();
+  });
+
   it('rejects reads of foreign notifications', async () => {
     const { service, notification } = createService();
     notification.updateMany.mockResolvedValue({ count: 0 });
@@ -144,11 +157,32 @@ describe('NotificationsService', () => {
         type: 'connection_request',
       }),
       expect.objectContaining({
+        jobId: 'notif:connection_request:user-b:connection-1',
         attempts: 5,
         backoff: expect.objectContaining({ type: 'exponential' }),
       }),
     );
     expect(notification.create).not.toHaveBeenCalled();
+  });
+
+  it('keys DM jobs by message so redeliveries collapse', async () => {
+    const { service, queue } = createService(true);
+
+    await service.newDirectMessage('user-b', {
+      senderId: 'user-a',
+      senderName: 'Alice',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      preview: 'hello',
+    });
+
+    expect(queue.add).toHaveBeenCalledWith(
+      'NOTIFICATION_CREATE',
+      expect.anything(),
+      expect.objectContaining({
+        jobId: 'notif:new_dm:user-b:message-1',
+      }),
+    );
   });
 
   it('falls back to direct writes when the queue is down', async () => {
