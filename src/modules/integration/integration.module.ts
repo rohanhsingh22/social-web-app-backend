@@ -26,6 +26,6 @@ const OAUTH_PROVIDERS = 'OAUTH_PROVIDERS';
       ): OAuthProvider[] => [facebook, google],
     },
   ],
-  exports: [IntegrationService, ProviderRegistry],
+  exports: [IntegrationService, ProviderRegistry, OAuthStateService],
 })
 export class IntegrationModule {}

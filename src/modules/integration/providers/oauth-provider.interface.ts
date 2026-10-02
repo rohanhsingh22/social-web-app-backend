@@ -14,7 +14,8 @@ export interface OAuthProvider {
   readonly id: string;
   readonly displayName: string;
 
-  getLoginUrl(state: string): Promise<string>;
-  exchangeCode(code: string): Promise<string>;
+  // redirectUri overrides the configured callback (e.g. separate admin flow).
+  getLoginUrl(state: string, redirectUri?: string): Promise<string>;
+  exchangeCode(code: string, redirectUri?: string): Promise<string>;
   fetchProfile(accessToken: string): Promise<NormalizedProfile>;
 }

@@ -28,6 +28,24 @@ export const appConfig = () => {
     corsOrigins: parseOrigins(process.env.CORS_ORIGINS),
     cookieDomain: process.env.COOKIE_DOMAIN ?? 'localhost',
   },
+  admin: {
+    // Canonical admin frontend URL. Post-OAuth redirects are allowlisted to this.
+    appBaseUrl: process.env.ADMIN_APP_BASE_URL ?? 'http://localhost:5174',
+    // Separate Google OAuth callback for admin login. Must be registered in the
+    // Google console alongside the social callback; never reuse the social one.
+    googleCallbackUrl:
+      process.env.ADMIN_GOOGLE_CALLBACK_URL ??
+      'http://localhost:3001/admin/auth/callback/google',
+    accessTokenTtl: process.env.ADMIN_ACCESS_TOKEN_TTL ?? '10m',
+    // Idle + absolute privileged-session bounds (server-enforced).
+    sessionIdleMinutes: Number(process.env.ADMIN_SESSION_IDLE_MINUTES ?? 30),
+    sessionAbsoluteHours: Number(process.env.ADMIN_SESSION_ABSOLUTE_HOURS ?? 12),
+    mfaPendingMinutes: Number(process.env.ADMIN_MFA_PENDING_MINUTES ?? 10),
+    inviteTtlHours: Number(process.env.ADMIN_INVITE_TTL_HOURS ?? 48),
+    // AES-256-GCM key (64 hex chars) for TOTP secrets at rest. Missing in
+    // production fails closed; development falls back to an ephemeral key.
+    mfaEncryptionKey: process.env.ADMIN_MFA_ENCRYPTION_KEY,
+  },
   auth: {
     jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
     jwtIssuer: process.env.JWT_ISSUER ?? 'hirotoli-api',

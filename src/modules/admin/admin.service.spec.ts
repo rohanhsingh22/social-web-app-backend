@@ -18,6 +18,9 @@ describe('AdminService', () => {
       moderationAction: {
         create: jest.fn(),
       },
+      adminAuditEvent: {
+        create: jest.fn(),
+      },
       channelMessage: {
         update: jest.fn(),
       },
@@ -48,6 +51,9 @@ describe('AdminService', () => {
     const prisma = {
       bannedWord: {
         findMany: jest.fn(),
+      },
+      report: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'r-1' }),
       },
       $transaction: jest.fn((callback: (transaction: typeof tx) => unknown) =>
         callback(tx),
@@ -87,9 +93,9 @@ describe('AdminService', () => {
   it('prevents moderators from moderating themselves', async () => {
     const { service } = createService();
 
-    await expect(service.banUser('admin-id', 'admin-id', {})).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      service.banUser('admin-id', 'admin-id', { reason: 'self-ban attempt' }),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('rejects invalid report status filters', () => {
@@ -124,6 +130,16 @@ describe('AdminService', () => {
         reason: 'abuse',
       }),
     });
+    // Phase 1: atomic dual-write to the append-only audit trail.
+    expect(tx.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'admin-id',
+        action: 'ban_user',
+        targetType: 'user',
+        targetId: 'user-id',
+        reason: 'abuse',
+      }),
+    });
     expect(authService.invalidateUserSessionsCache).toHaveBeenCalledWith(
       'user-id',
     );
@@ -139,7 +155,9 @@ describe('AdminService', () => {
     });
 
     await expect(
-      service.deleteChannelMessage('admin-id', 'message-id', {}),
+      service.deleteChannelMessage('admin-id', 'message-id', {
+        reason: 'policy violation',
+      }),
     ).resolves.toEqual(expect.objectContaining({ status: MessageStatus.deleted }));
     expect(tx.moderationAction.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -157,8 +175,23 @@ describe('AdminService', () => {
     tx.directMessage.update.mockRejectedValue(new Error('missing'));
 
     await expect(
-      service.deleteDirectMessage('admin-id', 'missing', {}),
+      service.deleteDirectMessage('admin-id', 'missing', {
+        reason: 'reported DM evidence',
+      }),
     ).rejects.toThrow(NotFoundException);
+  });
+
+  it('blocks deletion of unreported direct messages', async () => {
+    const { service, prisma } = createService();
+    (prisma as unknown as { report: { findFirst: jest.Mock } }).report = {
+      findFirst: jest.fn().mockResolvedValue(null),
+    };
+
+    await expect(
+      service.deleteDirectMessage('admin-id', 'dm-unreported', {
+        reason: 'attempted browse',
+      }),
+    ).rejects.toThrow('DM_ACCESS_DENIED');
   });
 
   it('sends legal notices through the notification system with an audit', async () => {
@@ -174,6 +207,10 @@ describe('AdminService', () => {
     (
       prisma as unknown as { moderationAction: { create: jest.Mock } }
     ).moderationAction = { create: moderationCreate };
+    const auditCreate = jest.fn().mockResolvedValue({});
+    (
+      prisma as unknown as { adminAuditEvent: { create: jest.Mock } }
+    ).adminAuditEvent = { create: auditCreate };
 
     await expect(
       service.sendLegalNotice('admin-id', {
@@ -195,6 +232,13 @@ describe('AdminService', () => {
         targetUserId: 'user-1',
       }),
     });
+    expect(auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'send_legal_notice',
+        targetType: 'user',
+        targetId: 'user-1',
+      }),
+    });
   });
 
   it('soft-deletes thoughts with an audit action', async () => {
@@ -206,7 +250,9 @@ describe('AdminService', () => {
     });
 
     await expect(
-      service.deleteThought('admin-id', 'thought-1', {}),
+      service.deleteThought('admin-id', 'thought-1', {
+        reason: 'harassment',
+      }),
     ).resolves.toEqual(
       expect.objectContaining({ status: MessageStatus.deleted }),
     );

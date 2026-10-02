@@ -11,23 +11,139 @@ import {
 } from '@nestjs/common';
 import { ReportStatus } from '@prisma/client';
 import { envelope } from '@app/common/api-response';
-import { AuthGuard } from '@app/modules/auth/auth.guard';
-import { CurrentUser } from '@app/modules/auth/current-user.decorator';
-import { AuthenticatedUser } from '@app/modules/auth/auth.types';
 import { AdminService } from './admin.service';
-import { AdminGuard } from './admin.guard';
+import { AdminReadsService } from './admin-reads.service';
+import { AdminCasesService } from './admin-cases.service';
+import { AdminOpsService } from './admin-ops.service';
+import { AdminAuthGuard } from './auth/admin-auth.guard';
+import { AdminPermissionsGuard } from './auth/admin-permissions.guard';
+import { RequirePermissions } from './auth/require-permissions.decorator';
+import { CurrentAdmin } from './auth/current-admin.decorator';
+import type { AdminRequestUser } from './auth/admin-auth.guard';
 import { AdminActionDto } from './dto/admin-action.dto';
+import { AdminAuditQueryDto } from './dto/admin-audit-query.dto';
+import { AdminOverviewQueryDto } from './dto/admin-overview-query.dto';
+import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
+import { AdminCasesQueryDto } from './dto/admin-cases-query.dto';
+import { AdminCaseResolveDto } from './dto/admin-case-resolve.dto';
+import { AdminContentQueryDto } from './dto/admin-content-query.dto';
+import { AdminNoticesQueryDto } from './dto/admin-notices-query.dto';
+import { BannedWordPreviewDto } from './dto/banned-word-preview.dto';
+import { AdminAnalyticsQueryDto } from './dto/admin-analytics-query.dto';
+import { AdminFailedJobsQueryDto } from './dto/admin-ops-query.dto';
 import { CreateBannedWordDto, UpdateBannedWordDto } from './dto/banned-word.dto';
 import { CreateChannelDto, UpdateChannelDto } from './dto/channel-admin.dto';
 import { LegalNoticeDto } from './dto/legal-notice.dto';
 import { ReportStatusDto } from './dto/report-status.dto';
 
+// Phase 1: isolated admin sessions (AdminAuthGuard) + per-route permissions.
+// The blanket AdminGuard is retired from this controller; social JWTs no
+// longer authorize any route here.
 @Controller('admin')
-@UseGuards(AuthGuard, AdminGuard)
+@UseGuards(AdminAuthGuard, AdminPermissionsGuard)
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly adminReads: AdminReadsService,
+    private readonly adminCases: AdminCasesService,
+    private readonly adminOps: AdminOpsService,
+  ) {}
+
+  // ---- Phase 2 reads: overview, users, audit ----
+
+  @Get('overview')
+  @RequirePermissions('overview.read')
+  async overview(
+    @CurrentAdmin() admin: AdminRequestUser,
+    @Query() query: AdminOverviewQueryDto,
+  ) {
+    return envelope(await this.adminReads.getOverview(admin, query));
+  }
+
+  @Get('users')
+  @RequirePermissions('users.read')
+  async users(@Query() query: AdminUsersQueryDto) {
+    return envelope(await this.adminReads.listUsers(query));
+  }
+
+  @Get('users/:id')
+  @RequirePermissions('users.read')
+  async userDetail(@Param('id') id: string) {
+    return envelope({ user: await this.adminReads.getUserDetail(id) });
+  }
+
+  @Get('users/:id/moderation-history')
+  @RequirePermissions('users.read')
+  async userModerationHistory(@Param('id') id: string) {
+    return envelope(await this.adminReads.getUserModerationHistory(id));
+  }
+
+  @Get('audit')
+  @RequirePermissions('audit.read')
+  async audit(
+    @CurrentAdmin() admin: AdminRequestUser,
+    @Query() query: AdminAuditQueryDto,
+  ) {
+    return envelope(await this.adminReads.listAudit(admin, query));
+  }
+
+  // ---- Phase 3: unified moderation cases + content ----
+
+  @Get('moderation/cases')
+  @RequirePermissions('reports.read')
+  async cases(
+    @CurrentAdmin() admin: AdminRequestUser,
+    @Query() query: AdminCasesQueryDto,
+  ) {
+    return envelope(await this.adminCases.listCases(admin, query));
+  }
+
+  @Get('moderation/cases/:id')
+  @RequirePermissions('reports.read')
+  async caseDetail(
+    @CurrentAdmin() admin: AdminRequestUser,
+    @Param('id') id: string,
+  ) {
+    return envelope(await this.adminCases.getCaseDetail(admin, decodeURIComponent(id)));
+  }
+
+  @Post('moderation/cases/:id/claim')
+  @RequirePermissions('reports.assign')
+  async claimCase(
+    @CurrentAdmin() admin: AdminRequestUser,
+    @Param('id') id: string,
+  ) {
+    return envelope(
+      await this.adminCases.claimCase(admin.id, decodeURIComponent(id)),
+    );
+  }
+
+  @Post('moderation/cases/:id/resolve')
+  @RequirePermissions('reports.resolve')
+  async resolveCase(
+    @CurrentAdmin() admin: AdminRequestUser,
+    @Param('id') id: string,
+    @Body() body: AdminCaseResolveDto,
+  ) {
+    return envelope(
+      await this.adminCases.resolveCase(admin.id, decodeURIComponent(id), body),
+    );
+  }
+
+  @Get('content/thoughts')
+  @RequirePermissions('reports.read')
+  async contentThoughts(@Query() query: AdminContentQueryDto) {
+    return envelope(await this.adminReads.listThoughts(query));
+  }
+
+  @Get('content/channel-messages')
+  @RequirePermissions('reports.read')
+  async contentChannelMessages(@Query() query: AdminContentQueryDto) {
+    return envelope(await this.adminReads.listChannelMessages(query));
+  }
 
   @Get('reports')
+  @RequirePermissions('reports.read')
   async reports(
     @Query('status') status?: ReportStatus,
     @Query('limit') limit?: string,
@@ -38,19 +154,26 @@ export class AdminController {
   }
 
   @Post('reports/:id/resolve')
+  @RequirePermissions('reports.resolve')
   async resolveReport(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: ReportStatusDto,
   ) {
     return envelope({
-      report: await this.adminService.resolveReport(id, admin.id, body.status),
+      report: await this.adminService.resolveReport(
+        id,
+        admin.id,
+        body.status,
+        body.reason,
+      ),
     });
   }
 
   @Post('users/:id/mute')
+  @RequirePermissions('users.mute')
   async mute(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: AdminActionDto,
   ) {
@@ -60,8 +183,9 @@ export class AdminController {
   }
 
   @Post('users/:id/unmute')
+  @RequirePermissions('users.mute')
   async unmute(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: AdminActionDto,
   ) {
@@ -71,8 +195,9 @@ export class AdminController {
   }
 
   @Post('users/:id/ban')
+  @RequirePermissions('users.ban')
   async ban(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: AdminActionDto,
   ) {
@@ -82,8 +207,9 @@ export class AdminController {
   }
 
   @Post('users/:id/unban')
+  @RequirePermissions('users.ban')
   async unban(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: AdminActionDto,
   ) {
@@ -93,8 +219,9 @@ export class AdminController {
   }
 
   @Delete('channel-messages/:id')
+  @RequirePermissions('content.remove')
   async deleteChannelMessage(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: AdminActionDto,
   ) {
@@ -104,8 +231,9 @@ export class AdminController {
   }
 
   @Delete('direct-messages/:id')
+  @RequirePermissions('content.remove')
   async deleteDirectMessage(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: AdminActionDto,
   ) {
@@ -115,8 +243,9 @@ export class AdminController {
   }
 
   @Delete('thoughts/:id')
+  @RequirePermissions('content.remove')
   async deleteThought(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: AdminActionDto,
   ) {
@@ -126,6 +255,7 @@ export class AdminController {
   }
 
   @Get('thought-reports')
+  @RequirePermissions('reports.read')
   async thoughtReports(
     @Query('status') status?: ReportStatus,
     @Query('limit') limit?: string,
@@ -136,8 +266,9 @@ export class AdminController {
   }
 
   @Post('thought-reports/:id/resolve')
+  @RequirePermissions('reports.resolve')
   async resolveThoughtReport(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: ReportStatusDto,
   ) {
@@ -146,13 +277,15 @@ export class AdminController {
         id,
         admin.id,
         body.status,
+        body.reason,
       ),
     });
   }
 
   @Post('channels')
+  @RequirePermissions('channels.write')
   async createChannel(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Body() body: CreateChannelDto,
   ) {
     return envelope({
@@ -161,8 +294,9 @@ export class AdminController {
   }
 
   @Patch('channels/:id')
+  @RequirePermissions('channels.write')
   async updateChannel(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: UpdateChannelDto,
   ) {
@@ -171,16 +305,42 @@ export class AdminController {
     });
   }
 
+  @Get('channels')
+  @RequirePermissions('channels.read')
+  async channels() {
+    return envelope(await this.adminReads.listChannels());
+  }
+
+  @Get('channels/:id/metrics')
+  @RequirePermissions('channels.read')
+  async channelMetrics(@Param('id') id: string) {
+    return envelope(await this.adminReads.channelMetrics(id));
+  }
+
+  @Get('tolis/overview')
+  @RequirePermissions('toli.system.read')
+  async tolisOverview() {
+    return envelope(await this.adminReads.toliOverview());
+  }
+
   @Get('banned-words')
+  @RequirePermissions('dictionary.write')
   async bannedWords() {
     return envelope({
       bannedWords: await this.adminService.listBannedWords(),
     });
   }
 
+  @Post('banned-words/preview')
+  @RequirePermissions('dictionary.write')
+  async previewBannedWord(@Body() body: BannedWordPreviewDto) {
+    return envelope(await this.adminService.previewBannedWords(body.text));
+  }
+
   @Post('banned-words')
+  @RequirePermissions('dictionary.write')
   async createBannedWord(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Body() body: CreateBannedWordDto,
   ) {
     return envelope({
@@ -189,8 +349,9 @@ export class AdminController {
   }
 
   @Post('legal-notices')
+  @RequirePermissions('notices.publish')
   async sendLegalNotice(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Body() body: LegalNoticeDto,
   ) {
     return envelope({
@@ -198,9 +359,48 @@ export class AdminController {
     });
   }
 
+  @Get('legal-notices')
+  @RequirePermissions('notices.publish')
+  async legalNotices(@Query() query: AdminNoticesQueryDto) {
+    return envelope(await this.adminReads.noticeHistory(query));
+  }
+
+  // ---- Phase 5: analytics + ops ----
+
+  @Get('analytics/overview')
+  @RequirePermissions('analytics.read')
+  async analyticsOverview(@Query() query: AdminAnalyticsQueryDto) {
+    return envelope(await this.adminReads.getAnalyticsOverview(query));
+  }
+
+  @Get('analytics/activity')
+  @RequirePermissions('analytics.read')
+  async analyticsActivity(@Query() query: AdminAnalyticsQueryDto) {
+    return envelope(await this.adminReads.getAnalyticsActivity(query));
+  }
+
+  @Get('ops/health')
+  @RequirePermissions('ops.read')
+  async opsHealth() {
+    return envelope(await this.adminOps.getHealth());
+  }
+
+  @Get('ops/queues')
+  @RequirePermissions('ops.read')
+  async opsQueues() {
+    return envelope(await this.adminOps.getQueues());
+  }
+
+  @Get('ops/failed-jobs')
+  @RequirePermissions('ops.read')
+  async opsFailedJobs(@Query() query: AdminFailedJobsQueryDto) {
+    return envelope(await this.adminOps.getFailedJobs(query.cursor, query.limit));
+  }
+
   @Patch('banned-words/:id')
+  @RequirePermissions('dictionary.write')
   async updateBannedWord(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
     @Body() body: UpdateBannedWordDto,
   ) {
@@ -210,8 +410,9 @@ export class AdminController {
   }
 
   @Delete('banned-words/:id')
+  @RequirePermissions('dictionary.write')
   async deleteBannedWord(
-    @CurrentUser() admin: AuthenticatedUser,
+    @CurrentAdmin() admin: AdminRequestUser,
     @Param('id') id: string,
   ) {
     return envelope({

@@ -22,9 +22,10 @@ export class GoogleProvider implements OAuthProvider {
 
   constructor(private readonly config: ConfigService) {}
 
-  async getLoginUrl(state: string): Promise<string> {
+  async getLoginUrl(state: string, redirectUri?: string): Promise<string> {
     const clientId = this.config.get<string>('auth.googleClientId');
-    const callbackUrl = this.config.get<string>('auth.googleCallbackUrl');
+    const callbackUrl =
+      redirectUri ?? this.config.get<string>('auth.googleCallbackUrl');
 
     if (!clientId || !callbackUrl) {
       this.logger.warn('Google auth attempted but is not configured');
@@ -43,10 +44,11 @@ export class GoogleProvider implements OAuthProvider {
     return url.toString();
   }
 
-  async exchangeCode(code: string): Promise<string> {
+  async exchangeCode(code: string, redirectUri?: string): Promise<string> {
     const clientId = this.config.get<string>('auth.googleClientId');
     const clientSecret = this.config.get<string>('auth.googleClientSecret');
-    const callbackUrl = this.config.get<string>('auth.googleCallbackUrl');
+    const callbackUrl =
+      redirectUri ?? this.config.get<string>('auth.googleCallbackUrl');
 
     if (!clientId || !clientSecret || !callbackUrl) {
       this.logger.warn('Google token exchange attempted but is not configured');

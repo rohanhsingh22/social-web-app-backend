@@ -18,6 +18,7 @@ enum UserRole {
   user
   moderator
   admin
+  owner
 }
 
 enum ChannelType {
@@ -114,7 +115,15 @@ model User {
   thoughtReports    ThoughtReport[]
   thoughtEvents     ThoughtEvent[]
   notifications     Notification[]
+  adminSessions     AdminSession[]
+  mfaCredential     AdminMfaCredential?
+  recoveryCodes     AdminRecoveryCode[]
+  invitationsReceived AdminInvitation[] @relation("AdminInvitationInvitee")
+  invitationsSent   AdminInvitation[] @relation("AdminInvitationInviter")
 
+  // Phase 2 admin directory: status/role-filtered, recency-ordered reads.
+  @@index([status, createdAt(sort: Desc)])
+  @@index([role, createdAt(sort: Desc)])
   @@map("users")
 }
 
@@ -392,6 +401,7 @@ model ThoughtReport {
 
   @@index([thoughtId])
   @@index([status])
+  @@index([status, createdAt(sort: Desc)])
   @@index([reporterId])
   @@map("thought_reports")
 }
@@ -432,6 +442,7 @@ model Report {
   reviewer               User?           @relation("ReportReviewer", fields: [reviewedBy], references: [id])
 
   @@index([status])
+  @@index([status, createdAt(sort: Desc)])
   @@index([reporterId])
   @@map("reports")
 }
@@ -479,6 +490,97 @@ model ModerationAction {
   @@index([adminId])
   @@index([targetUserId])
   @@map("moderation_actions")
+}
+
+// Phase 1 admin console: isolated privileged sessions, MFA, staff invites
+// and append-only audit. Social sessions (Session) are never valid on admin routes.
+model AdminSession {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  tokenHash     String    @map("token_hash")
+  ipAddress     String?   @map("ip_address")
+  userAgent     String?   @map("user_agent")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Absolute expiry. Idle expiry is derived from lastSeenAt in application code.
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6)
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  // Set when MFA was verified for this session. Null = never fully authenticated.
+  mfaAt         DateTime? @map("mfa_at") @db.Timestamptz(6)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt, expiresAt])
+  @@index([expiresAt])
+  @@map("admin_sessions")
+}
+
+model AdminMfaCredential {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @unique @map("user_id") @db.Uuid
+  type            String    @default("totp")
+  // AES-256-GCM envelope: base64(nonce):base64(ciphertext+tag).
+  secretEncrypted String    @map("secret_encrypted")
+  enabledAt       DateTime  @default(now()) @map("enabled_at") @db.Timestamptz(6)
+  lastUsedAt      DateTime? @map("last_used_at") @db.Timestamptz(6)
+  // RFC 6238 time-step of last accepted code. Rejects same/older steps (replay).
+  lastUsedStep    BigInt?   @map("last_used_step")
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admin_mfa_credentials")
+}
+
+model AdminRecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("admin_recovery_codes")
+}
+
+model AdminInvitation {
+  id         String    @id @default(uuid()) @db.Uuid
+  // Invitee must be an existing user; role is granted on accept, never before.
+  userId     String    @map("user_id") @db.Uuid
+  role       UserRole
+  // SHA-256 hex of the single-use token. The raw token is shown once.
+  tokenHash  String    @unique @map("token_hash")
+  invitedBy  String    @map("invited_by") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  acceptedAt DateTime? @map("accepted_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user       User      @relation("AdminInvitationInvitee", fields: [userId], references: [id], onDelete: Cascade)
+  inviter    User      @relation("AdminInvitationInviter", fields: [invitedBy], references: [id])
+
+  @@index([userId])
+  @@map("admin_invitations")
+}
+
+// Append-only application trail for consequential admin actions.
+// ModerationAction (legacy) is still written for compatibility.
+model AdminAuditEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  actorId        String   @map("actor_id") @db.Uuid
+  // Role at read time is resolved via actor join; stored when known at write time.
+  actorRole      String?  @map("actor_role")
+  action         String
+  targetType     String?  @map("target_type")
+  targetId       String?  @map("target_id")
+  reason         String?
+  // Redacted before/after fragments only. Never tokens, secrets or raw bodies.
+  metadata       Json?
+  requestId      String?  @map("request_id")
+  idempotencyKey String?  @unique @map("idempotency_key")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+  @@map("admin_audit_events")
 }
 
 model BannedWord {
