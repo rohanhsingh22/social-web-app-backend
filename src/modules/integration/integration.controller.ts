@@ -89,7 +89,7 @@ export class IntegrationController {
     // Single-transport model: see AuthController.
     response.cookie('refresh_token', refreshToken, {
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite: 'none',
       secure,
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
