@@ -79,4 +79,5 @@ jobs:
         with:
           name: hirotoli-worker-uat
           path: worker-bundle
+          include-hidden-files: true
           retention-days: 7
