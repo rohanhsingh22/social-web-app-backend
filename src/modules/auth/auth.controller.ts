@@ -25,6 +25,10 @@ export class AuthController {
   @Post('refresh')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async refresh(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    console.log(
+      'REFRESH COOKIE KEYS:',
+      Object.keys(request.cookies ?? {}),
+    );
     const result = await this.authService.refresh(
       request.cookies?.refresh_token,
       this.sessionContext(request),
