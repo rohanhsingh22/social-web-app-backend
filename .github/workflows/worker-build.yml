@@ -1,0 +1,61 @@
+name: Build HiRotoli Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-worker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Generate Prisma Client
+        run: npm run prisma:generate
+
+      - name: Build NestJS
+        run: npm run build
+
+      - name: Verify worker build
+        run: |
+          test -f dist/src/apps/worker/main.js
+          echo "Worker build verified:"
+          ls -lh dist/src/apps/worker/main.js
+
+      - name: Remove development dependencies
+        run: npm prune --omit=dev
+
+      - name: Prepare worker bundle
+        run: |
+          mkdir -p worker-bundle
+          cp -r dist worker-bundle/
+          cp -r node_modules worker-bundle/
+          cp package.json worker-bundle/
+          cp package-lock.json worker-bundle/
+
+      - name: Verify worker bundle
+        run: |
+          test -f worker-bundle/dist/src/apps/worker/main.js
+          test -d worker-bundle/node_modules
+          echo "Worker bundle ready"
+          du -sh worker-bundle
+
+      - name: Upload worker bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hirotoli-worker-uat
+          path: worker-bundle
+          retention-days: 7
