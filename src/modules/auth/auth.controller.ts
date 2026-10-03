@@ -75,7 +75,7 @@ export class AuthController {
     // cookie. _accessToken is returned in the response body instead.
     response.cookie('refresh_token', refreshToken, {
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite: 'none',
       secure,
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
