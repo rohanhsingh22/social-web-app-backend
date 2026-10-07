@@ -84,6 +84,26 @@ enum NotificationType {
   legal_notice
 }
 
+enum HomeMemberRole {
+  OWNER
+  PARTICIPANT
+}
+
+enum HomeInvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum HomeJoinRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
 model User {
   id                String             @id @default(uuid()) @db.Uuid
   publicUserId      String             @unique @map("public_user_id")
@@ -120,6 +140,16 @@ model User {
   recoveryCodes     AdminRecoveryCode[]
   invitationsReceived AdminInvitation[] @relation("AdminInvitationInvitee")
   invitationsSent   AdminInvitation[] @relation("AdminInvitationInviter")
+  ownedHome               Home?             @relation("HomeOwner")
+  homeMembership          HomeMembership?
+  homeInvitationsSent     HomeInvitation[]  @relation("HomeInvitationInviter")
+  homeInvitationsReceived HomeInvitation[]  @relation("HomeInvitationInvitee")
+  homeJoinRequestsSent    HomeJoinRequest[] @relation("HomeJoinRequestRequester")
+  homeJoinRequestsTargeted HomeJoinRequest[] @relation("HomeJoinRequestTarget")
+  charactersOwned       UserCharacter[]
+  characterItemsOwned UserCharacterItem[]
+  eventCoinWallet     EventCoinWallet?
+  eventCoinTransactions EventCoinTransaction[]
 
   // Phase 2 admin directory: status/role-filtered, recency-ordered reads.
   @@index([status, createdAt(sort: Desc)])
@@ -603,4 +633,178 @@ model UserSettings {
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_settings")
+}
+
+// Hirotoli Home Social Voice (Phase 1 domain foundation).
+// PostgreSQL is authoritative for membership. Presence (Redis) and
+// voice (SFU) are separate concerns and are never stored here.
+model Home {
+  id        String   @id @default(uuid()) @db.Uuid
+  ownerId   String   @unique @map("owner_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner       User            @relation("HomeOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships HomeMembership[]
+  invitations HomeInvitation[]
+  joinRequests HomeJoinRequest[]
+
+  @@map("homes")
+}
+
+model HomeMembership {
+  id       String         @id @default(uuid()) @db.Uuid
+  homeId   String         @map("home_id") @db.Uuid
+  userId   String         @unique @map("user_id") @db.Uuid
+  role     HomeMemberRole @default(PARTICIPANT)
+  joinedAt DateTime       @default(now()) @map("joined_at") @db.Timestamptz(6)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  home     Home           @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([homeId, userId])
+  @@map("home_memberships")
+}
+
+model HomeInvitation {
+  id          String               @id @default(uuid()) @db.Uuid
+  homeId      String               @map("home_id") @db.Uuid
+  inviterId   String               @map("inviter_id") @db.Uuid
+  inviteeId   String               @map("invitee_id") @db.Uuid
+  status      HomeInvitationStatus @default(PENDING)
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt   DateTime             @map("expires_at") @db.Timestamptz(6)
+  respondedAt DateTime?            @map("responded_at") @db.Timestamptz(6)
+  home        Home                 @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  inviter     User                 @relation("HomeInvitationInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+  invitee     User                 @relation("HomeInvitationInvitee", fields: [inviteeId], references: [id], onDelete: Cascade)
+
+  @@index([inviteeId, status])
+  @@index([homeId, status])
+  @@index([expiresAt])
+  @@map("home_invitations")
+}
+
+model HomeJoinRequest {
+  id             String                @id @default(uuid()) @db.Uuid
+  homeId         String                @map("home_id") @db.Uuid
+  requesterId    String                @map("requester_id") @db.Uuid
+  targetMemberId String                @map("target_member_id") @db.Uuid
+  status         HomeJoinRequestStatus @default(PENDING)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt      DateTime              @map("expires_at") @db.Timestamptz(6)
+  respondedAt    DateTime?             @map("responded_at") @db.Timestamptz(6)
+  home           Home                  @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  requester      User                  @relation("HomeJoinRequestRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  targetMember   User                  @relation("HomeJoinRequestTarget", fields: [targetMemberId], references: [id], onDelete: Cascade)
+
+  @@index([targetMemberId, status])
+  @@index([homeId, status])
+  @@index([expiresAt])
+  @@map("home_join_requests")
+}
+
+// HiRotoli character system (character-and-theme spec §6-7, §19-20).
+// Catalog rows are reference data (seeded, never user-created at launch).
+// Ownership/inventory are per-user grants validated server-side.
+model Character {
+  id               String   @id
+  name             String
+  assetId          String   @map("asset_id")
+  rigId            String   @map("rig_id")
+  defaultLoadoutId String   @map("default_loadout_id")
+  unlockType       String   @map("unlock_type")
+  unlockAmount     Int?     @map("unlock_amount")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owners           UserCharacter[]
+
+  @@map("characters")
+}
+
+model CharacterItem {
+  id                     String   @id
+  category               String
+  assetId                String   @map("asset_id")
+  rigId                  String   @map("rig_id")
+  attachment             Json
+  compatibleCharacterIds String[] @map("compatible_character_ids")
+  sourceType             String   @map("source_type")
+  eventId                String?  @map("event_id")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owners                 UserCharacterItem[]
+
+  @@index([category])
+  @@index([sourceType])
+  @@map("character_items")
+}
+
+model UserCharacter {
+  userId      String    @map("user_id") @db.Uuid
+  characterId String    @map("character_id")
+  acquiredAt  DateTime  @default(now()) @map("acquired_at") @db.Timestamptz(6)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@id([userId, characterId])
+  @@index([characterId])
+  @@map("user_characters")
+}
+
+model UserCharacterItem {
+  userId     String        @map("user_id") @db.Uuid
+  itemId     String        @map("item_id")
+  eventId    String?       @map("event_id")
+  acquiredAt DateTime      @default(now()) @map("acquired_at") @db.Timestamptz(6)
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item       CharacterItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([userId, itemId])
+  @@index([itemId])
+  @@map("user_character_items")
+}
+
+// Event Coins economy (spec §19). Renderer never sees balances — the
+// character service consumes already-authorized ownership only.
+model EventCoinWallet {
+  userId    String   @id @map("user_id") @db.Uuid
+  balance   Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("event_coin_wallets")
+}
+
+model EventCoinTransaction {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  amount    Int
+  reason    String
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("event_coin_transactions")
+}
+
+// Event world layers (spec §15-16). Empty at launch; future events insert
+// rows with a time window. Resolver overlays active rows onto the default.
+model HomeWorldThemeLayer {
+  id          String    @id @default(uuid()) @db.Uuid
+  priority    Int       @default(0)
+  environment Json?
+  lighting    Json?
+  atmosphere  Json?
+  decorations Json?
+  audio       Json?
+  startsAt    DateTime? @map("starts_at") @db.Timestamptz(6)
+  endsAt      DateTime? @map("ends_at") @db.Timestamptz(6)
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([isActive, startsAt, endsAt])
+  @@index([priority])
+  @@map("home_world_theme_layers")
 }

@@ -1,0 +1,528 @@
+HiRotoli — Production Character System & Default Home World
+
+Implementation Specification | Launch: Two Free Characters + One Permanent Hirotoli Home Theme
+
+1. Executive Decision
+
+This document defines the production foundation for the character system and the permanent 3D Home world. It is not the generic light/dark/accent application theme.
+
+Launch with exactly two free characters.
+
+Launch with one permanent default Hirotoli Home world used whenever no event is active.
+
+Future characters can be unlocked with Event Coins, but the launch catalog remains only two characters.
+
+Future cosmetics can be event rewards and remain owned after an event ends.
+
+Future events must add a theme/world layer instead of requiring a new Home implementation.
+
+Keep the existing application light/dark/system + accent preference system separate.
+
+2. Current Home — Source of Truth
+
+The latest HiRotoli page blueprint defines Home as the personal home base, distinct from the social feed. The 3D character is the focal point. Desktop uses a hero split with welcoming text/CTAs and a character stage; public-room/Toli entry cards remain below. The blueprint also requires WebGL fallback, model-loading state, reduced-motion handling and responsive mobile behavior.
+
+Current entry points: src/pages/home-page.tsx
+
+Current character area: src/components/character/*
+
+Implementation rule: preserve existing Home behavior and API contracts while replacing the limited character/world layer underneath it.
+
+3. Current Character — Problems to Solve
+
+The inspected current CharacterConfig is centered on gender plus optional skin, hair and outfit colors. CharacterAvatar selects male.glb/female.glb, clones/centers the scene and recolors meshes based on mesh-name conventions. The current GLBs contain humanoid skeletons but no embedded animations.
+
+Current assets:
+public/character-scene/male.glb
+public/character-scene/female.glb
+
+Not a general equipment/inventory system.
+
+No reusable attachment/socket abstraction.
+
+No proper animation-controller layer.
+
+Character identity is too tightly coupled to gender/color fields.
+
+Future hats, glasses, outfits and event cosmetics would become hardcoded additions.
+
+4. Target Architecture
+
+Character
+├── Base Model
+├── Appearance
+│   ├── Skin
+│   ├── Hair
+│   └── Face/Eyes where supported
+├── Equipment
+│   ├── Hair
+│   ├── Outfit Top
+│   ├── Outfit Bottom
+│   ├── Full Outfit
+│   ├── Headwear
+│   ├── Eyewear
+│   ├── Facewear
+│   ├── Footwear
+│   └── Accessories
+├── Animation Controller
+└── Renderer
+
+The renderer receives a validated character definition + loadout. It must not know why an item was granted.
+
+5. Launch Character Scope
+
+Character
+
+Launch
+
+Future
+
+Character 01
+
+Free
+
+Cosmetics can be added
+
+Character 02
+
+Free
+
+Cosmetics can be added
+
+Character 03+
+
+Not shipped
+
+Unlock with Event Coins later
+
+Use stable character IDs. Do not make gender the permanent identity key.
+
+6. Character Data Model
+
+type CharacterDefinition = {
+  id: string;
+  name: string;
+  assetId: string;
+  rigId: string;
+  defaultLoadoutId: string;
+  unlock: { type: "free" | "event_coins"; amount?: number };
+};
+
+type CharacterLoadout = {
+  characterId: string;
+  skinId?: string;
+  hairId?: string;
+  outfitTopId?: string;
+  outfitBottomId?: string;
+  fullOutfitId?: string;
+  headwearId?: string;
+  eyewearId?: string;
+  facewearId?: string;
+  footwearId?: string;
+  accessoryIds: string[];
+};
+
+Server validation is required before saving a loadout: ownership, compatibility, exclusive slots and valid asset IDs must be checked server-side.
+
+7. Equipment / Wardrobe
+
+type CharacterItem = {
+  id: string;
+  category:
+    | "hair" | "outfit_top" | "outfit_bottom" | "full_outfit"
+    | "headwear" | "eyewear" | "facewear" | "footwear" | "accessory";
+  assetId: string;
+  rigId: string;
+  attachment:
+    | { type: "skinned" }
+    | { type: "bone"; boneName: string }
+    | { type: "socket"; socketName: string };
+  compatibleCharacterIds: string[];
+  source: { type: "base" | "event" | "system"; eventId?: string };
+};
+
+Attachment behavior belongs in the equipment system, not scattered through Home components.
+
+8. Animation Layer
+
+Animations must be independent from the base character model. Initial set:
+
+Idle
+
+Wave / greeting
+
+Happy reaction
+
+Sad reaction
+
+Celebrate
+
+Interaction-ready
+
+The controller must support future event animations without changing CharacterRenderer.
+
+9. Recommended Asset Direction
+
+Quaternius is currently the strongest candidate for the first prototype because its official Universal Base Characters page states CC0 licensing, commercial use, six game-ready humanoid bases, 20 hairstyles, optimized animation-friendly topology and humanoid rigging. The official Modular Character Outfits page states CC0, commercial use, 12 outfits and 62 modular parts. The official Universal Animation Library states CC0, commercial use and 120+ humanoid animations.
+
+These sources are suitable candidates, not a final art-direction decision. We still need to judge whether their visual style matches Hirotoli before replacing the current models.
+
+Sources checked: https://quaternius.itch.io/universal-base-characters ; https://quaternius.itch.io/modular-character-outfits-fantasy ; https://quaternius.itch.io/universal-animation-library
+
+10. Asset Governance
+
+Store source URL, creator, asset version/date and license for every third-party asset.
+
+Keep license/readme files in the repository where appropriate.
+
+Prefer GLB/glTF for browser runtime.
+
+Optimize and compress assets before production use.
+
+Do not treat 'free download' as sufficient licensing evidence.
+
+Do not mix assets with incompatible licenses into one supposedly free/commercial-safe pack.
+
+public/
+├── characters/
+│   ├── base/
+│   │   ├── character-01/
+│   │   └── character-02/
+│   ├── items/
+│   │   ├── hair/
+│   │   ├── outfits/
+│   │   ├── headwear/
+│   │   ├── eyewear/
+│   │   ├── footwear/
+│   │   └── accessories/
+│   ├── animations/
+│   └── licenses/
+
+11. Character Rendering Pipeline
+
+CharacterStage
+└── CharacterRenderer
+    ├── load CharacterDefinition
+    ├── load CharacterLoadout
+    ├── load base model
+    ├── attach equipment
+    ├── configure materials
+    ├── initialize animation controller
+    └── render
+
+The same renderer should later work on Home, character preview/reward screens and other approved 3D surfaces.
+
+12. Permanent Hirotoli Home World
+
+The default Home theme is a real 3D world/experience theme. It is not CSS. It is the visual identity of Home when no event is active.
+
+Home World
+├── Environment
+│   ├── Sky / background
+│   ├── Ground
+│   └── World geometry
+├── Lighting
+├── Atmosphere
+│   ├── Fog
+│   ├── Particles
+│   └── Ambient effects
+├── Decorations / Props
+├── Character Stage
+└── Camera
+
+The art direction must make Hirotoli recognizable and welcoming, with a game-like feel. Do not lock arbitrary colors before the visual direction is approved.
+
+13. Home World Theme Contract
+
+type HomeWorldTheme = {
+  id: string;
+  name: string;
+  version: number;
+  environment: {
+    background?: AssetRef;
+    sky?: AssetRef;
+    ground?: AssetRef;
+    environmentModel?: AssetRef;
+  };
+  lighting: {
+    ambient: LightConfig;
+    directional?: LightConfig;
+    pointLights?: LightConfig[];
+  };
+  atmosphere: {
+    fog?: FogConfig;
+    particles?: ParticleConfig[];
+    effects?: EffectConfig[];
+  };
+  decorations: AssetRef[];
+  audio?: { ambient?: AssetRef; music?: AssetRef };
+  characterStage: {
+    position: [number, number, number];
+    rotation: [number, number, number];
+    scale: number;
+  };
+  camera: { position: [number, number, number]; target: [number, number, number] };
+};
+
+14. Home Renderer
+
+<HomeWorld theme={activeHomeTheme}>
+  <HomeEnvironment theme={theme} />
+  <HomeLighting theme={theme} />
+  <HomeAtmosphere theme={theme} />
+  <HomeDecorations theme={theme} />
+  <CharacterStage>
+    <CharacterRenderer definition={character} loadout={loadout} />
+  </CharacterStage>
+</HomeWorld>
+
+Keep the normal Home greeting, CTAs and navigation as accessible HTML/UI outside the WebGL canvas where practical.
+
+15. Default Theme vs Event Theme
+
+The permanent Hirotoli world is the base layer. A future event adds a temporary layer.
+
+Default Hirotoli World
+        +
+Optional Event World Layer
+        ↓
+Active Home Experience
+
+An event can override/add sky, lighting, particles, decorations, effects, audio and event objects. When it ends, only the event layer disappears. The default Home returns automatically.
+
+16. Theme Composition
+
+type HomeThemeLayer = {
+  id: string;
+  priority: number;
+  environment?: Partial<HomeWorldTheme["environment"]>;
+  lighting?: Partial<HomeWorldTheme["lighting"]>;
+  atmosphere?: Partial<HomeWorldTheme["atmosphere"]>;
+  decorations?: AssetRef[];
+  audio?: HomeWorldTheme["audio"];
+};
+
+The resolver produces one final renderable HomeWorldTheme from the default world plus zero or more active layers. Event timing is server-authoritative.
+
+17. Integration With Current Home
+
+Keep the existing Home greeting and meaningful CTAs.
+
+Keep public-room/Toli entry cards below the hero.
+
+Keep the character as a personal Home experience, not the public social avatar.
+
+Keep WebGL fallback, loading state and reduced-motion behavior.
+
+Do not let 3D decoration obscure navigation or text.
+
+On mobile, preserve the blueprint's 260–340px character-stage target and accessible stacked actions.
+
+18. Performance
+
+Load only the selected character and equipped items initially.
+
+Lazy-load nonessential decorations and event assets.
+
+Use optimized GLB/glTF and compressed textures where supported.
+
+Measure draw calls, texture memory, polygon count and frame rate.
+
+Reduce expensive effects on mobile.
+
+Pause/limit unnecessary animation/effects when the tab is hidden.
+
+Respect prefers-reduced-motion.
+
+Test on representative mid-range mobile hardware.
+
+19. Ownership / Event Coins
+
+CharacterDefinition
+├── Character 01 — free
+├── Character 02 — free
+└── Character 03+ — future event-coins unlocks
+
+Event Coins
+   ↓
+Server validates balance
+   ↓
+Character ownership record
+   ↓
+Character becomes selectable
+
+Event Coins belong to the economy/event layer. The character renderer only consumes an already-authorized character/loadout.
+
+20. Persistent Event Cosmetics
+
+Event cosmetics should become normal owned CharacterItems. Ending an event removes temporary world content but does not remove owned cosmetics.
+
+Event
+├── temporary Home world layer
+├── temporary interactions
+└── permanent rewards
+        ↓
+   CharacterItem
+        ↓
+     Inventory
+
+21. Backend Responsibilities
+
+Persist the user's selected character/loadout.
+
+Validate character and cosmetic ownership server-side.
+
+Validate compatibility before saving a loadout.
+
+Expose active event/theme metadata from a server-authoritative source.
+
+Grant Event Coins/rewards server-side.
+
+Keep Home world themes separate from global UI theme preferences.
+
+22. Suggested Frontend Structure
+
+src/
+├── components/
+│   ├── character/
+│   │   ├── CharacterRenderer.tsx
+│   │   ├── CharacterStage.tsx
+│   │   ├── CharacterEquipment.ts
+│   │   ├── CharacterAnimationController.ts
+│   │   └── character-types.ts
+│   └── home/
+│       ├── HomeWorld.tsx
+│       ├── HomeEnvironment.tsx
+│       ├── HomeLighting.tsx
+│       ├── HomeAtmosphere.tsx
+│       ├── HomeDecorations.tsx
+│       ├── HomeThemeResolver.ts
+│       └── home-world-types.ts
+└── pages/
+    └── home-page.tsx
+
+These are proposed boundaries. Reuse existing project conventions and components where they already satisfy the contract.
+
+23. Migration Plan
+
+Audit current Home/character code and freeze existing API/UI contracts.
+
+Select and verify the final character asset family.
+
+Introduce CharacterDefinition and CharacterLoadout without changing Home layout.
+
+Put the existing models behind the new renderer abstraction.
+
+Implement equipment slots and attachment points.
+
+Ship exactly two final launch characters.
+
+Add the initial animation controller.
+
+Refactor the current 3D Home into HomeWorld layers.
+
+Create and polish the permanent Hirotoli default world.
+
+Optimize loading/performance and accessibility.
+
+Run desktop/mobile QA.
+
+Only after the default Home is stable, connect the event-theme extension point.
+
+24. Event-Readiness Test
+
+The architecture passes the test if a future event can add a world layer, event props/effects and character cosmetics without modifying the core CharacterRenderer or duplicating HomeWorld.
+
+Event 01
+├── theme layer
+├── props/effects
+├── cosmetics
+└── rewards
+
+Core remains:
+CharacterRenderer
+HomeWorld
+ThemeResolver
+Inventory
+EventResolver
+
+25. Explicit Non-Goals
+
+No large launch character catalog.
+
+No paid character shop.
+
+No battle pass, gacha or complex cosmetic economy.
+
+No replacement of the global light/dark/accent system.
+
+No multiple Home worlds at launch.
+
+No full user-generated 3D avatar editor.
+
+No huge animation library loaded into Home.
+
+No full event system in this implementation.
+
+26. Definition of Done
+
+Exactly two selectable free characters work end-to-end.
+
+Character selection persists correctly.
+
+Supported equipment slots render correctly.
+
+Initial animation set works and respects reduced motion.
+
+Existing Home behavior remains intact.
+
+Default Hirotoli Home world is coherent and visually distinct.
+
+Home world values are driven through a theme definition.
+
+WebGL fallback/loading/error states work.
+
+Desktop and mobile Home are tested.
+
+Performance is measured on representative hardware.
+
+Third-party assets have verified licensing records.
+
+Adding a future event does not require rewriting CharacterRenderer/HomeWorld.
+
+27. Final Product Model
+
+HIROTOLI
+│
+├── Global UI Preferences
+│   └── light/dark/system + accent
+│
+├── Permanent Home World
+│   └── Hirotoli Default Theme
+│
+├── Character System
+│   ├── Character 01 — Free
+│   ├── Character 02 — Free
+│   ├── Equipment
+│   └── Animations
+│
+└── Future Event Layer
+    ├── Temporary Home theme changes
+    ├── Event decorations/effects
+    ├── Event cosmetics
+    ├── Event Coins
+    └── Future character unlocks
+
+The immediate goal is intentionally simple: make Home feel like a real Hirotoli world and give users two polished, reusable 3D characters. The architecture is production-ready for future expansion without implementing that future expansion prematurely.
+
+28. Research Notes
+
+Current official Quaternius sources checked during preparation:
+
+Universal Base Characters — https://quaternius.itch.io/universal-base-characters
+
+Modular Character Outfits — https://quaternius.itch.io/modular-character-outfits-fantasy
+
+Universal Animation Library — https://quaternius.itch.io/universal-animation-library
+
+The official pages currently state CC0 and commercial use for these packs. License records should be rechecked at the time each asset is actually committed/shipped.

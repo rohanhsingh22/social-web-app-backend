@@ -9,6 +9,14 @@ const parseOrigins = (value?: string): string[] => {
     .filter(Boolean);
 };
 
+const parseBoolean = (value?: string, fallback = true): boolean => {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+
+  return !['false', '0', 'no', 'off'].includes(value.trim().toLowerCase());
+};
+
 export const appConfig = () => {
   if (
     (process.env.NODE_ENV ?? 'development') === 'production' &&
@@ -73,6 +81,19 @@ export const appConfig = () => {
   },
   observability: {
     sentryDsn: process.env.SENTRY_DSN,
+  },
+  voice: {
+    // LiveKit SFU behind the HomeVoiceProvider abstraction. Absent in
+    // development/test — token issuance fails closed with VOICE_UNAVAILABLE.
+    livekitUrl: process.env.LIVEKIT_URL,
+    livekitApiKey: process.env.LIVEKIT_API_KEY,
+    livekitApiSecret: process.env.LIVEKIT_API_SECRET,
+  },
+  home: {
+    // Rollout lever (spec #136). Off kills every /home route with
+    // HOME_DISABLED without reverting code; percentage stages (if ever
+    // needed) build on this single server decision.
+    enabled: parseBoolean(process.env.HOME_SOCIAL_VOICE_ENABLED, true),
   },
   logging: {
     level: process.env.LOG_LEVEL ?? 'log',

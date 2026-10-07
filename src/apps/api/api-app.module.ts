@@ -15,6 +15,8 @@ import { ConnectionsModule } from '@app/modules/connections/connections.module';
 import { DirectMessagesModule } from '@app/modules/direct-messages/direct-messages.module';
 import { ThoughtsModule } from '@app/modules/thoughts/thoughts.module';
 import { ToliModule } from '@app/modules/toli/toli.module';
+import { CharactersModule } from '@app/modules/characters/characters.module';
+import { HomeModule } from '@app/modules/home/home.module';
 import { ReportsModule } from '@app/modules/reports/reports.module';
 import { BlocksModule } from '@app/modules/blocks/blocks.module';
 import { ModerationModule } from '@app/modules/moderation/moderation.module';
@@ -55,6 +57,8 @@ import { UploadsModule } from '@app/modules/uploads/uploads.module';
     DirectMessagesModule,
     ThoughtsModule,
     ToliModule,
+    CharactersModule,
+    HomeModule,
     ReportsModule,
     BlocksModule,
     ModerationModule,

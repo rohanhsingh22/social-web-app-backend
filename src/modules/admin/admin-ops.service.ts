@@ -146,7 +146,7 @@ export class AdminOpsService {
         req.destroy();
         resolve('down');
       });
-      req.on('error', (error: NodeJS.ErrnoException) => {
+      req.on('error', (error: Error & { code?: string }) => {
         resolve(error?.code === 'ECONNREFUSED' ? 'down' : 'unknown');
       });
       req.end();

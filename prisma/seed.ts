@@ -115,6 +115,121 @@ async function main() {
     });
     toliSortOrder += 10;
   }
+
+  // Character system launch catalog (spec §5-7): exactly two free
+  // characters + base items. Idempotent — safe to re-run.
+  const characters = [
+    {
+      id: 'character-01',
+      name: 'Aria',
+      assetId: '/character-scene/female.glb',
+      rigId: 'humanoid-v1',
+      defaultLoadoutId: 'loadout-character-01-base',
+      unlockType: 'free',
+      unlockAmount: null as number | null,
+    },
+    {
+      id: 'character-02',
+      name: 'Kai',
+      assetId: '/character-scene/male.glb',
+      rigId: 'humanoid-v1',
+      defaultLoadoutId: 'loadout-character-02-base',
+      unlockType: 'free',
+      unlockAmount: null as number | null,
+    },
+  ];
+  for (const c of characters) {
+    await prisma.character.upsert({
+      where: { id: c.id },
+      update: {
+        name: c.name,
+        assetId: c.assetId,
+        rigId: c.rigId,
+        defaultLoadoutId: c.defaultLoadoutId,
+        unlockType: c.unlockType,
+        unlockAmount: c.unlockAmount,
+      },
+      create: c,
+    });
+  }
+
+  const items = [
+    {
+      id: 'skin-base-01',
+      category: 'hair',
+      assetId: 'color-skin-base',
+      rigId: 'humanoid-v1',
+      attachment: { type: 'skinned' },
+      compatibleCharacterIds: ['character-01', 'character-02'],
+      sourceType: 'base',
+      eventId: null as string | null,
+    },
+    {
+      id: 'hair-base-01',
+      category: 'hair',
+      assetId: 'color-hair-base',
+      rigId: 'humanoid-v1',
+      attachment: { type: 'skinned' },
+      compatibleCharacterIds: ['character-01', 'character-02'],
+      sourceType: 'base',
+      eventId: null as string | null,
+    },
+    {
+      id: 'outfit-top-base-01',
+      category: 'outfit_top',
+      assetId: 'color-outfit-top-base',
+      rigId: 'humanoid-v1',
+      attachment: { type: 'skinned' },
+      compatibleCharacterIds: ['character-01', 'character-02'],
+      sourceType: 'base',
+      eventId: null as string | null,
+    },
+    {
+      id: 'outfit-bottom-base-01',
+      category: 'outfit_bottom',
+      assetId: 'color-outfit-bottom-base',
+      rigId: 'humanoid-v1',
+      attachment: { type: 'skinned' },
+      compatibleCharacterIds: ['character-01', 'character-02'],
+      sourceType: 'base',
+      eventId: null as string | null,
+    },
+    {
+      id: 'headwear-base-cap-01',
+      category: 'headwear',
+      assetId: 'procedural-cap-01',
+      rigId: 'humanoid-v1',
+      attachment: { type: 'socket', socketName: 'headTop' },
+      compatibleCharacterIds: ['character-01', 'character-02'],
+      sourceType: 'base',
+      eventId: null as string | null,
+    },
+    {
+      id: 'eyewear-base-glasses-01',
+      category: 'eyewear',
+      assetId: 'procedural-glasses-01',
+      rigId: 'humanoid-v1',
+      attachment: { type: 'socket', socketName: 'faceFront' },
+      compatibleCharacterIds: ['character-01', 'character-02'],
+      sourceType: 'base',
+      eventId: null as string | null,
+    },
+  ];
+  for (const item of items) {
+    await prisma.characterItem.upsert({
+      where: { id: item.id },
+      update: {
+        category: item.category,
+        assetId: item.assetId,
+        rigId: item.rigId,
+        attachment: item.attachment,
+        compatibleCharacterIds: item.compatibleCharacterIds,
+        sourceType: item.sourceType,
+        eventId: item.eventId,
+      },
+      create: item,
+    });
+  }
 }
 
 main()

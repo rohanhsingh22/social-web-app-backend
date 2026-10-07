@@ -9,7 +9,30 @@ export const REALTIME_FANOUT_CHANNEL = 'realtime:fanout';
 export type FanoutUserEvent =
   | { event: 'connection:changed'; userIds: string[] }
   | { event: 'notification:new'; userIds: string[] }
-  | { event: 'toli:changed'; userIds: string[] };
+  | { event: 'toli:changed'; userIds: string[] }
+  | { event: 'home:changed'; userIds: string[] }
+  | {
+      event: 'home:invitation:new';
+      userIds: string[];
+      invitation: {
+        id: string;
+        homeId: string;
+        inviterId: string;
+        inviteeId: string;
+        expiresAt: string;
+      };
+    }
+  | {
+      event: 'home:join-request:new';
+      userIds: string[];
+      joinRequest: {
+        id: string;
+        homeId: string;
+        requesterId: string;
+        targetMemberId: string;
+        expiresAt: string;
+      };
+    };
 
 @Injectable()
 export class FanoutService {
@@ -19,9 +42,12 @@ export class FanoutService {
 
   // Fire-and-forget by design: callers `void` this. A Redis outage must
   // never fail the mutation; clients still converge via polling.
+  // `data` carries event-specific payloads (e.g. a new invitation) so the
+  // realtime app can push them without another database read.
   async publishUserEvent(
     userIds: Array<string | null | undefined>,
     event: FanoutUserEvent['event'],
+    data?: Record<string, unknown>,
   ): Promise<void> {
     const unique = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
 
@@ -30,7 +56,7 @@ export class FanoutService {
     }
 
     try {
-      const payload: FanoutUserEvent = { event, userIds: unique } as FanoutUserEvent;
+      const payload = { event, userIds: unique, ...data } as FanoutUserEvent;
       await this.redis.connection.publish(
         REALTIME_FANOUT_CHANNEL,
         JSON.stringify(payload),

@@ -7,6 +7,7 @@ import { RealtimeAuthModule } from '@app/realtime/realtime-auth/realtime-auth.mo
 import { ChannelGatewayModule } from '@app/realtime/channel-gateway/channel-gateway.module';
 import { DirectMessageGatewayModule } from '@app/realtime/direct-message-gateway/direct-message-gateway.module';
 import { NotificationsGatewayModule } from '@app/realtime/notifications-gateway/notifications-gateway.module';
+import { HomeGatewayModule } from '@app/realtime/home-gateway/home-gateway.module';
 import { PresenceModule } from '@app/realtime/presence/presence.module';
 import { RealtimeRateLimitModule } from '@app/realtime/realtime-rate-limit/realtime-rate-limit.module';
 
@@ -33,6 +34,7 @@ import { RealtimeRateLimitModule } from '@app/realtime/realtime-rate-limit/realt
     ChannelGatewayModule,
     DirectMessageGatewayModule,
     NotificationsGatewayModule,
+    HomeGatewayModule,
     PresenceModule,
     RealtimeRateLimitModule,
   ],

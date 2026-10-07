@@ -1,0 +1,4605 @@
+# Hirotoli Home Social Voice
+
+## Full Production Implementation Specification
+
+### Status
+
+**Implementation specification — Production**
+
+### Scope
+
+This document defines the complete implementation architecture for the Hirotoli Home shared social/voice experience.
+
+It covers:
+
+* Backend
+* Database
+* Domain model
+* Business rules
+* REST APIs
+* Realtime events
+* Presence
+* Invitations
+* Join requests
+* Room membership
+* Voice infrastructure
+* Reconnection
+* Permissions
+* Frontend state
+* Home UI
+* 3D character rendering
+* Multiple character rendering
+* Character loading/performance
+* Error handling
+* Concurrency
+* Security
+* Testing
+* Observability
+* Rollout
+* Future extensibility
+
+---
+
+# 1. Product Principle
+
+The most important design principle is:
+
+> **The user should never think about a "voice room".**
+
+Internally, the backend can use concepts such as:
+
+* Home
+* HomeRoom
+* HomeMembership
+* VoiceSession
+* Invitation
+* JoinRequest
+
+But the user experiences:
+
+> "Let's go to their Home."
+
+Not:
+
+> "Let's create a voice room."
+
+The room is an implementation concept.
+
+The Home is the product concept.
+
+---
+
+# 2. User Experience
+
+The user experience should remain extremely simple.
+
+Example:
+
+```text
+User 1 opens Home
+
+        🧑
+      User 1
+```
+
+User 1 opens connections.
+
+```text
+User 2        +
+User 3        +
+User 4        Offline
+User 5        Already in your Home
+User 6        3 in Home       +
+```
+
+User 1 clicks `+` next to User 2.
+
+User 2 receives:
+
+```text
+User 1 wants you to join their Home
+
+[Accept] [Reject]
+```
+
+User 2 accepts.
+
+Immediately:
+
+```text
+User 1       User 2
+```
+
+Both are connected.
+
+No room creation screen.
+
+No room ID.
+
+No "Join Voice Room" workflow.
+
+No additional setup.
+
+---
+
+# 3. Core Domain Model
+
+The system should be built around **Home Membership**, not around a raw Socket.IO room.
+
+The conceptual structure is:
+
+```text
+User
+ │
+ └── HomeMembership
+        │
+        └── Home
+              │
+              ├── Owner
+              └── Participants
+```
+
+Voice is attached to the Home membership.
+
+---
+
+# 4. Home
+
+A Home represents the shared Home experience.
+
+Conceptually:
+
+```text
+Home
+ ├── id
+ ├── owner
+ └── members
+```
+
+Maximum:
+
+```text
+4 members
+```
+
+A Home can have:
+
+```text
+1 owner
+0–3 participants
+```
+
+---
+
+# 5. Home Membership
+
+A membership represents the user's current membership in a Home.
+
+Conceptually:
+
+```text
+HomeMembership
+ ├── homeId
+ ├── userId
+ ├── role
+ └── joinedAt
+```
+
+Roles:
+
+```text
+OWNER
+PARTICIPANT
+```
+
+The database should enforce:
+
+> A user can have at most one active Home membership.
+
+This is one of the most important invariants.
+
+---
+
+# 6. Important Invariants
+
+The backend must enforce these rules.
+
+## Rule 1 — One Home per user
+
+Invalid:
+
+```text
+User 1 → Home A
+User 1 → Home B
+```
+
+Valid:
+
+```text
+User 1 → Home A
+```
+
+---
+
+## Rule 2 — Maximum four members
+
+Invalid:
+
+```text
+User 1
+User 2
+User 3
+User 4
+User 5
+```
+
+Valid:
+
+```text
+User 1
+User 2
+User 3
+User 4
+```
+
+---
+
+## Rule 3 — Only owner can remove
+
+```text
+OWNER → can remove participant
+PARTICIPANT → cannot remove participant
+```
+
+---
+
+## Rule 4 — Anyone can invite
+
+Any active Home member can invite one of their connections.
+
+---
+
+## Rule 5 — Anyone can accept their own incoming requests
+
+Any active Home member can accept/reject join requests originating from their own connections.
+
+---
+
+## Rule 6 — Users already in another Home cannot interact through Home invitations
+
+If:
+
+```text
+User 1 → Home A
+User 2 → Home B
+```
+
+then:
+
+```text
+User 1 cannot invite User 2.
+User 2 cannot invite User 1.
+User 1 cannot request User 2's Home.
+User 2 cannot request User 1's Home.
+```
+
+The frontend should hide the action.
+
+The backend must also reject it.
+
+---
+
+## Rule 7 — Offline does not mean leaving
+
+```text
+Membership = Home A
+Presence = OFFLINE
+```
+
+is valid.
+
+Offline users remain members.
+
+---
+
+## Rule 8 — Explicit leave means leaving
+
+```text
+MEMBER → Leave
+```
+
+removes the membership.
+
+The user no longer belongs to the Home.
+
+---
+
+## Rule 9 — Owner explicitly leaving destroys the Home
+
+```text
+OWNER → Leave
+```
+
+results in:
+
+```text
+Home destroyed
+All members leave the Home
+```
+
+---
+
+## Rule 10 — Invitation does not reserve capacity
+
+This is extremely important.
+
+If User 1 invites seven users:
+
+```text
+User 2
+User 3
+User 4
+User 5
+User 6
+User 7
+User 8
+```
+
+the Home does not reserve seven positions.
+
+Actual membership determines capacity.
+
+---
+
+# 7. Invitation Model
+
+An invitation should be a proper domain object.
+
+Conceptually:
+
+```text
+HomeInvitation
+ ├── id
+ ├── homeId
+ ├── inviterId
+ ├── inviteeId
+ ├── status
+ ├── createdAt
+ └── expiresAt
+```
+
+Statuses:
+
+```text
+PENDING
+ACCEPTED
+REJECTED
+EXPIRED
+CANCELLED
+```
+
+---
+
+# 8. Invitation Lifetime
+
+Every invitation is valid for:
+
+```text
+20 seconds
+```
+
+Lifecycle:
+
+```text
+PENDING
+ ├── ACCEPT → ACCEPTED
+ ├── REJECT → REJECTED
+ ├── EXPIRE → EXPIRED
+ └── CANCEL → CANCELLED
+```
+
+Expiration must be determined by the server.
+
+The frontend timer is only visual.
+
+---
+
+# 9. Invitation Does Not Guarantee Joining
+
+Example:
+
+```text
+Home:
+
+User 1
+User 2
+User 3
+User 4
+```
+
+User 5 still has an invitation.
+
+User 5 presses:
+
+```text
+Accept
+```
+
+The server checks the Home.
+
+```text
+Current members = 4
+Maximum = 4
+```
+
+Result:
+
+```text
+HOME_FULL
+```
+
+User 5 does not join.
+
+Frontend displays:
+
+```text
+Home is Full
+
+This Home has reached its maximum capacity.
+
+[OK]
+```
+
+---
+
+# 10. Invitation Can Become Valid Again
+
+Suppose:
+
+```text
+User 1
+User 2
+User 3
+User 4
+```
+
+Home is full.
+
+User 5 has a valid invitation.
+
+User 3 leaves.
+
+Now:
+
+```text
+User 1
+User 2
+User 4
+```
+
+There is a free slot.
+
+If User 5's invitation has not expired, User 5 can accept and join.
+
+Therefore:
+
+> Home capacity is checked at acceptance time, not invitation creation time.
+
+---
+
+# 11. Simultaneous Acceptance
+
+Suppose one slot is available.
+
+```text
+User 5 → Accept
+User 6 → Accept
+```
+
+at almost exactly the same time.
+
+Only one can succeed.
+
+The database transaction must guarantee:
+
+```text
+4 members maximum
+```
+
+Possible result:
+
+```text
+User 5 → ACCEPTED
+User 6 → HOME_FULL
+```
+
+or the reverse.
+
+Never:
+
+```text
+5 members
+```
+
+---
+
+# 12. Join Request
+
+Join requests are different from invitations.
+
+Example:
+
+```text
+User 5 = Home Owner
+
+Home:
+User 5
+User 2
+User 3
+```
+
+User 1 is connected to User 2.
+
+User 1 sees:
+
+```text
+User 2
+3 in Home
++
+```
+
+User 1 clicks `+`.
+
+This creates:
+
+```text
+User 1
+   ↓
+Join Request
+   ↓
+User 2
+```
+
+Not:
+
+```text
+User 1 → User 5
+```
+
+---
+
+# 13. Join Request Model
+
+Conceptually:
+
+```text
+HomeJoinRequest
+ ├── id
+ ├── homeId
+ ├── requesterId
+ ├── targetMemberId
+ ├── status
+ ├── createdAt
+ └── expiresAt
+```
+
+Where:
+
+```text
+requesterId = User 1
+targetMemberId = User 2
+```
+
+---
+
+# 14. Join Request Lifecycle
+
+```text
+PENDING
+ ├── ACCEPTED
+ ├── REJECTED
+ └── EXPIRED
+```
+
+The current product rule is:
+
+```text
+20 seconds
+```
+
+for pending requests.
+
+---
+
+# 15. Join Request Capacity Check
+
+The same capacity rule applies.
+
+The request can exist while the Home has capacity.
+
+But when accepted:
+
+```text
+CHECK CURRENT MEMBERS
+        ↓
+CHECK MAX = 4
+        ↓
+ACCEPT ONLY IF SLOT EXISTS
+```
+
+---
+
+# 16. Existing-Home Restriction
+
+If:
+
+```text
+User 1 → Home A
+User 2 → Home B
+```
+
+and they are connections:
+
+```text
+User 1 ↔ User 2
+```
+
+then neither can initiate a Home invitation/request to the other.
+
+Backend response:
+
+```text
+USER_ALREADY_IN_ANOTHER_HOME
+```
+
+The frontend should normally prevent the action from appearing, but the backend remains authoritative.
+
+---
+
+# 17. Room Creation
+
+A Home does not need an explicit "Create Room" button.
+
+The first time User 1 invites someone:
+
+```text
+User 1
+```
+
+the backend ensures User 1 has an active Home.
+
+Conceptually:
+
+```text
+User 1
+   ↓
+Invite User 2
+   ↓
+Ensure Home exists
+   ↓
+Create invitation
+```
+
+If User 1 already has a Home:
+
+```text
+Reuse existing Home
+```
+
+This keeps the Home concept invisible to the user.
+
+---
+
+# 18. Owner
+
+The owner is:
+
+```text
+HomeMembership.role = OWNER
+```
+
+The owner never changes during the Home's lifetime.
+
+If the owner explicitly leaves:
+
+```text
+Destroy Home
+```
+
+There is no owner-transfer feature in this version.
+
+---
+
+# 19. Participant
+
+Participants:
+
+```text
+HomeMembership.role = PARTICIPANT
+```
+
+Participants can:
+
+* invite connections
+* accept their own join requests
+* reject their own join requests
+* self mute
+* locally mute others
+* leave
+
+Participants cannot:
+
+* remove other members
+* destroy Home
+
+---
+
+# 20. Presence
+
+The existing backend already has a Redis-backed presence system.
+
+The current system tracks user sockets and uses a TTL-based online state.
+
+We should reuse the existing presence infrastructure rather than create another independent online-status system.
+
+However:
+
+> Home membership must never be stored as presence.
+
+These remain separate:
+
+```text
+Membership
+Presence
+Voice Connection
+```
+
+---
+
+# 21. Presence Example
+
+```text
+User 4
+
+Membership:
+Home A
+
+Presence:
+OFFLINE
+
+Voice:
+DISCONNECTED
+```
+
+Valid.
+
+When User 4 returns:
+
+```text
+Membership:
+Home A
+
+Presence:
+ONLINE
+
+Voice:
+CONNECTING → CONNECTED
+```
+
+---
+
+# 22. Voice Architecture
+
+Voice should not be transmitted through Socket.IO.
+
+Socket.IO is responsible for:
+
+* Home state
+* invitations
+* join requests
+* membership events
+* presence-related UI events
+* commands
+* synchronization
+
+A dedicated SFU handles audio.
+
+Recommended architecture:
+
+```text
+                    ┌──────────────┐
+                    │   Browser    │
+                    │   Hirotoli   │
+                    └──────┬───────┘
+                           │
+             ┌─────────────┴──────────────┐
+             │                            │
+             ▼                            ▼
+       Hirotoli API                Hirotoli Realtime
+             │                            │
+             │                            │
+             ▼                            ▼
+       PostgreSQL                       Redis
+             │
+             │
+             ▼
+       Voice Provider / SFU
+```
+
+For the first production implementation, use an SFU such as **LiveKit**, behind a Hirotoli-owned abstraction.
+
+LiveKit provides participant management, server-side participant removal, access tokens, reconnection handling, and React/JavaScript SDKs.
+
+The important architectural rule is:
+
+> Hirotoli owns membership. The voice provider owns the media connection.
+
+Do not allow the voice provider to become the source of truth for Hirotoli Home membership.
+
+---
+
+# 23. Voice Provider Abstraction
+
+Do not spread LiveKit-specific code throughout the application.
+
+Create an abstraction:
+
+```text
+HomeVoiceProvider
+```
+
+Conceptually:
+
+```text
+HomeVoiceProvider
+ ├── createAccessToken()
+ ├── connect()
+ ├── disconnect()
+ ├── removeParticipant()
+ └── closeHome()
+```
+
+Then:
+
+```text
+LiveKitHomeVoiceProvider
+```
+
+implements it.
+
+If Hirotoli later changes provider:
+
+```text
+LiveKit
+     ↓
+Another SFU
+```
+
+the Home domain does not need to be rewritten.
+
+---
+
+# 24. Backend Module Structure
+
+Create a dedicated module:
+
+```text
+src/modules/home/
+```
+
+Suggested structure:
+
+```text
+src/modules/home/
+│
+├── home.module.ts
+│
+├── home.service.ts
+├── home-membership.service.ts
+├── home-invitation.service.ts
+├── home-join-request.service.ts
+├── home-voice.service.ts
+├── home-presence.service.ts
+├── home-policy.service.ts
+│
+├── home.controller.ts
+│
+├── dto/
+│   ├── invite-to-home.dto.ts
+│   ├── respond-invitation.dto.ts
+│   ├── request-home-join.dto.ts
+│   ├── respond-join-request.dto.ts
+│   └── remove-member.dto.ts
+│
+├── home.errors.ts
+├── home.types.ts
+│
+└── home.service.spec.ts
+```
+
+Do not put everything into `home.service.ts`.
+
+---
+
+# 25. Domain Responsibility Separation
+
+### HomeService
+
+Responsible for:
+
+* create/find Home
+* destroy Home
+* get Home state
+
+### HomeMembershipService
+
+Responsible for:
+
+* join
+* leave
+* remove
+* membership validation
+* role checks
+* capacity checks
+
+### HomeInvitationService
+
+Responsible for:
+
+* create invitation
+* accept
+* reject
+* expire
+* cancel
+
+### HomeJoinRequestService
+
+Responsible for:
+
+* create request
+* accept
+* reject
+* expire
+
+### HomeVoiceService
+
+Responsible for:
+
+* voice token generation
+* voice provider interaction
+* participant removal from voice infrastructure
+* voice session lifecycle
+
+### HomePolicyService
+
+Responsible for reusable rules:
+
+```text
+canInvite()
+canRequestJoin()
+canAccept()
+canRemove()
+canLeave()
+canJoin()
+```
+
+This is important for future features.
+
+---
+
+# 26. Database Design
+
+Use PostgreSQL because the current backend already uses Prisma/PostgreSQL.
+
+The initial models should conceptually be:
+
+```text
+Home
+HomeMembership
+HomeInvitation
+HomeJoinRequest
+```
+
+---
+
+# 27. Home Table
+
+Conceptual Prisma model:
+
+```text
+Home
+----
+id
+ownerId
+createdAt
+updatedAt
+```
+
+`ownerId` should identify the owner.
+
+A user should only have one active Home.
+
+---
+
+# 28. HomeMembership Table
+
+Conceptually:
+
+```text
+HomeMembership
+--------------
+id
+homeId
+userId
+role
+joinedAt
+updatedAt
+```
+
+Constraints:
+
+```text
+UNIQUE(userId)
+UNIQUE(homeId, userId)
+```
+
+The `UNIQUE(userId)` constraint guarantees one active Home membership per user.
+
+This is stronger than relying on application code.
+
+---
+
+# 29. Invitation Table
+
+Conceptually:
+
+```text
+HomeInvitation
+--------------
+id
+homeId
+inviterId
+inviteeId
+status
+createdAt
+expiresAt
+respondedAt
+```
+
+Indexes:
+
+```text
+inviteeId + status
+homeId + status
+expiresAt
+```
+
+---
+
+# 30. Join Request Table
+
+Conceptually:
+
+```text
+HomeJoinRequest
+---------------
+id
+homeId
+requesterId
+targetMemberId
+status
+createdAt
+expiresAt
+respondedAt
+```
+
+Indexes:
+
+```text
+targetMemberId + status
+homeId + status
+expiresAt
+```
+
+---
+
+# 31. Why We Keep Invitations Separate From Membership
+
+Membership answers:
+
+> Who is actually in the Home?
+
+Invitation answers:
+
+> Who has been invited?
+
+Those must never be confused.
+
+Example:
+
+```text
+Home members = 4
+
+Pending invitations = 20
+```
+
+is technically possible.
+
+The Home is still only 4 members.
+
+---
+
+# 32. API Architecture
+
+Use REST for business commands.
+
+Use Socket.IO for realtime delivery.
+
+This fits the current architecture.
+
+Existing backend already separates API and realtime applications.
+
+---
+
+# 33. Home API Endpoints
+
+Suggested endpoints:
+
+```text
+GET    /home
+GET    /home/connections
+
+POST   /home/invitations
+POST   /home/invitations/:id/accept
+POST   /home/invitations/:id/reject
+
+POST   /home/join-requests
+POST   /home/join-requests/:id/accept
+POST   /home/join-requests/:id/reject
+
+POST   /home/leave
+DELETE /home/members/:userId
+
+POST   /home/voice/token
+```
+
+These are product-level endpoints.
+
+The actual controller implementation should remain thin.
+
+---
+
+# 34. GET /home
+
+Returns the current user's Home state.
+
+If the user has no shared Home:
+
+```text
+{
+  home: null
+}
+```
+
+If the user belongs to a Home:
+
+```text
+{
+  home: {
+    id,
+    ownerId,
+    memberCount,
+    members: [...]
+  }
+}
+```
+
+---
+
+# 35. Home Member Response
+
+Each member should contain the information needed to render their character.
+
+Conceptually:
+
+```text
+{
+  userId,
+  publicUserId,
+  displayName,
+  role,
+  presence,
+  characterConfig,
+  joinedAt
+}
+```
+
+The frontend should not need to request each member's profile separately.
+
+One Home response should be sufficient to render the Home.
+
+---
+
+# 36. Character Privacy
+
+The current backend deliberately excludes `characterConfig` from the general profile card used across social surfaces.
+
+That is good.
+
+Do not add `characterConfig` globally to:
+
+* Thoughts
+* DMs
+* chat messages
+* generic profile cards
+
+Instead:
+
+> Home-specific responses explicitly include the character configuration required by the Home renderer.
+
+This keeps the 3D character a Home-specific identity layer.
+
+---
+
+# 37. Connection List API
+
+The existing connections endpoint currently returns profile information but does not include character configuration in its general public connection card.
+
+Do not pollute the existing connection API with Home-specific fields.
+
+Instead, create:
+
+```text
+GET /home/connections
+```
+
+This endpoint should return connection states specifically relevant to Home.
+
+Example:
+
+```text
+[
+  {
+    userId,
+    displayName,
+    characterConfig,
+    presence: "online",
+    homeState: "AVAILABLE"
+  },
+  {
+    userId,
+    displayName,
+    characterConfig,
+    presence: "offline",
+    homeState: "AVAILABLE"
+  },
+  {
+    userId,
+    displayName,
+    characterConfig,
+    presence: "online",
+    homeState: "MY_HOME"
+  },
+  {
+    userId,
+    displayName,
+    characterConfig,
+    presence: "online",
+    homeState: "OTHER_HOME",
+    homeMemberCount: 3
+  }
+]
+```
+
+---
+
+# 38. Home Connection States
+
+Frontend states:
+
+```text
+AVAILABLE
+OFFLINE
+MY_HOME
+OTHER_HOME
+```
+
+Additional server states can exist internally.
+
+Example UI:
+
+```text
+Online       +
+Offline      Offline
+My Home      Already in your Home
+Other Home   3 in Home +
+```
+
+---
+
+# 39. Invitation API
+
+```text
+POST /home/invitations
+```
+
+Request:
+
+```text
+{
+  inviteeId
+}
+```
+
+Server validates:
+
+1. authenticated
+2. inviter is active
+3. inviter belongs to Home
+4. inviter can invite
+5. invitee is a connection
+6. invitee is active
+7. invitee is online
+8. invitee is not already in a Home
+9. inviter and invitee are not in different Homes
+10. Home itself is valid
+11. invitation isn't already pending
+
+Then creates invitation.
+
+---
+
+# 40. Accept Invitation
+
+```text
+POST /home/invitations/:id/accept
+```
+
+Must execute a transaction.
+
+Conceptual flow:
+
+```text
+Load invitation
+       ↓
+Validate pending
+       ↓
+Validate not expired
+       ↓
+Validate Home exists
+       ↓
+Validate inviter still owns Home
+       ↓
+Validate user has no Home
+       ↓
+Count members
+       ↓
+If >= 4 → HOME_FULL
+       ↓
+Create membership
+       ↓
+Mark invitation accepted
+       ↓
+Publish realtime events
+       ↓
+Return Home
+```
+
+---
+
+# 41. Concurrency Protection
+
+The acceptance transaction must prevent:
+
+```text
+4 → 5 members
+```
+
+The database transaction should lock/recheck the relevant Home state before inserting membership.
+
+A second concurrent acceptance must fail safely.
+
+This is one of the most important backend requirements.
+
+---
+
+# 42. Join Request API
+
+```text
+POST /home/join-requests
+```
+
+Request:
+
+```text
+{
+  targetMemberId
+}
+```
+
+Server resolves:
+
+```text
+targetMemberId
+       ↓
+target's current Home
+       ↓
+Home
+```
+
+Then validates:
+
+* requester is authenticated
+* requester is connected to target
+* requester is not already in a Home
+* target is in a Home
+* requester is not already in target Home
+* target is online
+* target is an active member
+* Home isn't full
+* no duplicate pending request
+
+---
+
+# 43. Why Request Targets a Member
+
+We must preserve the product rule:
+
+```text
+User 1
+   ↓
+request
+   ↓
+User 2
+```
+
+not:
+
+```text
+User 1
+   ↓
+request
+   ↓
+Home owner
+```
+
+The recipient of the request is the connection through whom the requester discovered the Home.
+
+---
+
+# 44. Leave
+
+```text
+POST /home/leave
+```
+
+If participant:
+
+```text
+Remove membership
+Notify Home
+Disconnect voice
+```
+
+If owner:
+
+```text
+Destroy Home
+Remove all memberships
+Invalidate pending invitations
+Invalidate pending join requests
+Close voice session
+Notify all members
+```
+
+---
+
+# 45. Remove Participant
+
+```text
+DELETE /home/members/:userId
+```
+
+Only owner can perform this.
+
+Server verifies:
+
+```text requester.role === OWNER
+```
+
+Then:
+
+```text Remove membership
+Remove voice participant
+Invalidate their Home access
+Notify them
+Notify remaining members
+```
+
+---
+
+# 46. Realtime Namespace
+
+Create:
+
+```text
+/home
+```
+
+Socket namespace.
+
+The existing backend already uses separate Socket.IO namespaces for realtime features, so this follows the current architecture.
+
+---
+
+# 47. Realtime Events
+
+Events should be domain-oriented.
+
+### Invitation
+
+```text
+home:invitation:new
+home:invitation:expired
+home:invitation:accepted
+home:invitation:rejected
+```
+
+### Join requests
+
+```text
+home:join-request:new
+home:join-request:expired
+home:join-request:accepted
+home:join-request:rejected
+```
+
+### Membership
+
+```text
+home:member:joined
+home:member:left
+home:member:removed
+home:destroyed
+```
+
+### Home synchronization
+
+```text
+home:state
+```
+
+---
+
+# 48. Do Not Trust Realtime Events
+
+Socket events are notifications.
+
+They are not authoritative commands.
+
+For example:
+
+```text
+home:member:joined
+```
+
+means:
+
+> "The server says a member joined."
+
+It does not mean:
+
+> "The frontend should independently add a member without validating the resulting state."
+
+For important transitions, the client should be able to recover the complete Home state.
+
+---
+
+# 49. Home State Synchronization
+
+The most important realtime event should be:
+
+```text
+home:state
+```
+
+It provides the authoritative current state.
+
+If the frontend misses events because of:
+
+* network interruption
+* browser sleep
+* socket reconnect
+* server restart
+
+the frontend can call:
+
+```text
+GET /home
+```
+
+and recover.
+
+---
+
+# 50. Realtime Architecture
+
+The existing backend already has:
+
+```text
+API
+Realtime
+Redis
+Fanout
+Socket.IO
+```
+
+and uses Redis to bridge events between API and realtime processes.
+
+Home should use the same pattern.
+
+```text
+API mutation
+     ↓
+HomeService
+     ↓
+Database transaction
+     ↓
+Fanout event
+     ↓
+Redis
+     ↓
+Realtime service
+     ↓
+Socket.IO
+     ↓
+Users
+```
+
+---
+
+# 51. Redis
+
+Redis should be used for:
+
+* cross-process fanout
+* realtime coordination
+* short-lived Home state caches where useful
+* rate limiting
+* presence support
+
+Redis should not become the permanent source of truth for Home membership.
+
+PostgreSQL remains authoritative.
+
+---
+
+# 52. Home Redis Keys
+
+Suggested names:
+
+```text
+home:presence:{homeId}
+home:voice:{homeId}
+home:sync:{homeId}
+home:invite:rate:{userId}
+home:request:rate:{userId}
+```
+
+Only introduce keys when actually needed.
+
+Do not duplicate database state unnecessarily.
+
+---
+
+# 53. Voice Token
+
+The browser must never receive the voice provider secret.
+
+Backend:
+
+```text
+POST /home/voice/token
+```
+
+Backend validates:
+
+```text user belongs to Home
+Home active
+```
+
+Then generates a short-lived provider token.
+
+Frontend receives:
+
+```text
+{
+  token,
+  serverUrl,
+  expiresAt
+}
+```
+
+---
+
+# 54. Voice Room Identity
+
+The internal voice room name should not expose sensitive database information.
+
+Use a generated opaque identifier.
+
+Example:
+
+```text
+home_voice_9d1...
+```
+
+The user never sees this.
+
+---
+
+# 55. Voice Membership
+
+The database says:
+
+```text
+User 1 ∈ Home A
+User 2 ∈ Home A
+```
+
+The voice provider says:
+
+```text
+User 1 connected
+User 2 connected
+```
+
+These are separate.
+
+It is possible to have:
+
+```text
+Home membership = YES
+Voice connection = NO
+```
+
+This is expected during:
+
+* offline state
+* reconnect
+* network failure
+* browser suspension
+
+---
+
+# 56. Reconnection
+
+The voice layer should handle temporary network loss without destroying Home membership.
+
+LiveKit's current SDK supports reconnecting and emits `Reconnecting`/`Reconnected` states.
+
+The application should therefore treat:
+
+```text
+voice disconnected temporarily
+```
+
+as:
+
+```text
+voice connection problem
+```
+
+not:
+
+```text
+leave Home
+```
+
+---
+
+# 57. Owner Reconnection
+
+If owner temporarily disconnects:
+
+```text
+Home remains alive
+```
+
+Owner reconnects:
+
+```text
+Home membership still exists
+       ↓
+Voice token generated
+       ↓
+Voice reconnect
+```
+
+Only explicit owner leave destroys the Home.
+
+---
+
+# 58. Browser Close
+
+For implementation, browser termination should initially be treated as a **temporary connectivity loss**, not an explicit Home leave.
+
+The server should not destroy membership simply because a socket disappears.
+
+Explicit leave is always an application action.
+
+This is necessary to support your rule:
+
+> Offline does not mean leave.
+
+---
+
+# 59. Voice Removal
+
+When owner removes User 3:
+
+```text
+Database:
+membership removed
+
+Realtime:
+member removed
+
+Voice provider:
+User 3 forcibly disconnected
+```
+
+The removed user cannot automatically reconnect to that Home because they no longer have Home membership.
+
+---
+
+# 60. Self Mute
+
+Self mute belongs to the voice layer.
+
+The user disables their own microphone.
+
+It affects:
+
+```text
+Other users
+```
+
+---
+
+# 61. Local Mute
+
+Local mute is entirely local.
+
+Example:
+
+```text
+User 1 mutes User 3
+```
+
+Only User 1 stops hearing User 3.
+
+No database persistence is initially required.
+
+It can later become a user preference if desired.
+
+---
+
+# 62. Frontend Architecture
+
+Create a dedicated feature:
+
+```text
+src/features/home/
+```
+
+Suggested structure:
+
+```text
+src/features/home/
+│
+├── api/
+│   └── home-api.ts
+│
+├── realtime/
+│   └── use-home-socket.ts
+│
+├── voice/
+│   ├── home-voice-provider.ts
+│   ├── livekit-home-voice-provider.ts
+│   ├── use-home-voice.ts
+│   └── home-voice-context.tsx
+│
+├── components/
+│   ├── home-connections-dialog.tsx
+│   ├── home-invitation-dialog.tsx
+│   ├── home-join-request-dialog.tsx
+│   ├── home-full-dialog.tsx
+│   ├── home-members.tsx
+│   ├── home-member-card.tsx
+│   └── home-controls.tsx
+│
+├── hooks/
+│   ├── use-home.ts
+│   ├── use-home-actions.ts
+│   └── use-home-members.ts
+│
+└── types.ts
+```
+
+---
+
+# 63. Home Page Refactor
+
+Current:
+
+```text
+src/pages/home-page.tsx
+```
+
+currently renders the existing CharacterScene.
+
+The new page should become conceptually:
+
+```text
+HomePage
+ ├── HomeStateProvider
+ │
+ ├── HomeStage
+ │    └── HomeCharacterScene
+ │
+ ├── HomeConnectionsButton
+ │
+ ├── HomeConnectionsDialog
+ │
+ ├── HomeInvitationOverlay
+ │
+ ├── HomeJoinRequestOverlay
+ │
+ └── HomeControls
+```
+
+The page itself should not contain the business logic.
+
+---
+
+# 64. Current Character System Audit
+
+The current frontend already has:
+
+```text
+CharacterScene
+CharacterAvatar
+CharacterConfig
+male.glb
+female.glb
+```
+
+and `CharacterScene` already accepts:
+
+```text
+configs?: CharacterConfig[]
+```
+
+and maps multiple characters into the same Canvas.
+
+Therefore:
+
+> **We do not need to replace the character system.**
+
+We need to refactor it into a proper reusable Home character stage.
+
+---
+
+# 65. Current Character Problem #1 — Index Keys
+
+Current rendering uses:
+
+```text
+key={i}
+```
+
+This is not appropriate for dynamic Home membership.
+
+When users join/leave:
+
+```text
+User 1
+User 2
+User 3
+User 4
+```
+
+then User 2 leaves.
+
+Index-based keys can cause incorrect component identity reuse.
+
+Replace with:
+
+```text
+key={member.userId}
+```
+
+---
+
+# 66. Current Character Problem #2 — Character Identity Is Missing
+
+Current CharacterAvatar accepts only:
+
+```text
+CharacterConfig
+```
+
+The new system needs:
+
+```text
+HomeMember
+```
+
+Conceptually:
+
+```text
+HomeMember
+ ├── userId
+ ├── displayName
+ ├── role
+ ├── presence
+ ├── characterConfig
+ ├── voiceState
+ └── muted
+```
+
+Then:
+
+```text
+HomeCharacter
+```
+
+renders the character and its identity.
+
+---
+
+# 67. Character Rendering API
+
+Create:
+
+```text
+HomeCharacter
+```
+
+with a contract like:
+
+```text
+<HomeCharacter
+  member={member}
+  position={position}
+  scale={scale}
+/>
+```
+
+The character renderer should not know:
+
+* invitation logic
+* Home ownership
+* API calls
+* Socket.IO
+* voice provider
+
+It only renders a character.
+
+---
+
+# 68. Character Scene
+
+Replace the generic:
+
+```text
+CharacterScene
+```
+
+for Home with:
+
+```text
+HomeCharacterScene
+```
+
+Responsibilities:
+
+* Canvas
+* lighting
+* environment
+* camera
+* pedestal/stage
+* character positioning
+* member labels
+* active-speaker indication
+* offline state
+* responsive layout
+
+---
+
+# 69. Character Renderer Architecture
+
+Use:
+
+```text
+HomeCharacterScene
+        ↓
+HomeCharacter
+        ↓
+CharacterModel
+```
+
+Separate:
+
+```text
+Scene
+Model
+Identity
+Voice state
+```
+
+This gives us future flexibility.
+
+---
+
+# 70. Keep Male/Female GLBs
+
+The current project has:
+
+```text
+male.glb
+female.glb
+```
+
+These should remain the initial character assets.
+
+Do not introduce a new avatar provider unless the current visual design is rejected.
+
+The models are already integrated into the current project and are approximately 10 MB each, so we should optimize them before production rather than immediately replace them.
+
+---
+
+# 71. Current GLB Limitation
+
+The current models contain no animation clips.
+
+Therefore the initial production implementation should treat them as:
+
+```text
+static character models
+```
+
+with dynamic UI state around them.
+
+Do not build an animation state machine until actual animation assets are introduced.
+
+---
+
+# 72. Character Material Isolation
+
+This is an important refactor.
+
+The current renderer clones the GLTF scene but changes material colors on the cloned scene.
+
+The production renderer must ensure that each character instance owns its material state.
+
+Otherwise:
+
+```text
+User 1 outfitColor = blue
+User 2 outfitColor = red
+```
+
+could accidentally share material objects.
+
+Use proper object/material cloning or `SkeletonUtils.clone` where appropriate.
+
+The character instance must be visually independent.
+
+---
+
+# 73. Material Mapping
+
+The current implementation identifies materials partly using mesh-name strings such as:
+
+```text
+skin
+body
+face
+hair
+cloth
+shirt
+outfit
+```
+
+This is fragile.
+
+The actual GLB assets contain named materials such as:
+
+```text
+Wolf3D_Skin
+Wolf3D_Hair
+Wolf3D_Outfit_Top
+Wolf3D_Outfit_Bottom
+```
+
+and similar model-specific materials.
+
+Production implementation should map by known material names first.
+
+Example concept:
+
+```text
+Wolf3D_Skin → skinColor
+Wolf3D_Hair → hairColor
+Wolf3D_Outfit_Top → outfitColor
+Wolf3D_Outfit_Bottom → outfitColor
+```
+
+with a safe fallback.
+
+---
+
+# 74. Character Configuration
+
+Keep the current model:
+
+```text
+CharacterConfig
+{
+  gender
+  skinColor
+  hairColor
+  outfitColor
+}
+```
+
+Do not redesign the profile system just for this feature.
+
+This is enough for the first Home implementation.
+
+---
+
+# 75. Home Character Positioning
+
+The current scene places characters in a simple horizontal line with fixed spacing.
+
+That is suitable for a prototype but not ideal for the production Home.
+
+Use predefined layouts.
+
+```text
+1 user:
+
+        1
+
+
+2 users:
+
+      1     2
+
+
+3 users:
+
+    1    2    3
+
+
+4 users:
+
+      1    2
+      3    4
+```
+
+The layout should be calculated from member count.
+
+---
+
+# 76. Character Layout Engine
+
+Create:
+
+```text
+home-character-layout.ts
+```
+
+Example conceptual API:
+
+```text
+getHomeCharacterLayout(memberCount)
+```
+
+returns positions.
+
+The renderer does not need to know why positions exist.
+
+Future layouts can be added without rewriting the character component.
+
+---
+
+# 77. Camera
+
+The current camera dynamically changes based on character count.
+
+That idea can remain.
+
+But the new implementation should use:
+
+```text
+HomeCharacterLayout
++
+Camera framing
+```
+
+instead of:
+
+```text
+count × arbitrary spacing
+```
+
+The camera should frame all characters.
+
+---
+
+# 78. Responsive Character Rendering
+
+Desktop:
+
+```text
+Large stage
+Characters visible together
+```
+
+Tablet:
+
+```text
+Reduced spacing
+```
+
+Mobile:
+
+```text
+Compact 2×2 arrangement
+```
+
+The user should never have to zoom manually just to see all four characters.
+
+---
+
+# 79. Character Labels
+
+Each character should have:
+
+```text
+Display Name
+```
+
+near/below the character.
+
+Example:
+
+```text
+       🧑
+      Rohan
+```
+
+The label should be HTML/UI rather than baked into the 3D model.
+
+This makes it easier to:
+
+* support accessibility
+* truncate names
+* show offline
+* show speaking state
+* show owner
+* add future badges
+
+---
+
+# 80. Owner Indicator
+
+The owner should be visually identifiable but subtly.
+
+For example:
+
+```text
+Rohan
+Owner
+```
+
+or a small Home/owner indicator.
+
+Do not turn Home into a gaming HUD.
+
+---
+
+# 81. Offline Character
+
+When a member is offline:
+
+```text
+Character remains visible
+```
+
+but should visually communicate:
+
+```text
+Offline
+```
+
+Possible presentation:
+
+* reduced opacity
+* muted label
+* small offline indicator
+
+Do not remove the character.
+
+---
+
+# 82. Speaking Indicator
+
+When voice is active, the character can later display:
+
+```text
+speaking
+```
+
+through:
+
+* subtle glow
+* ring
+* outline
+* microphone state
+
+This should be driven by voice state.
+
+Do not tie it directly to the character rendering implementation.
+
+---
+
+# 83. Home Controls
+
+Controls should remain minimal.
+
+Potential controls:
+
+```text
+Mute
+Speaker
+Leave
+```
+
+Owner:
+
+```text
+Remove participant
+```
+
+Do not expose:
+
+```text
+Room ID
+Room settings
+Voice server
+Connection state
+```
+
+to the user.
+
+---
+
+# 84. Connections Dialog
+
+The existing connections system can provide the base data, but Home needs its own state-aware presentation.
+
+Example:
+
+```text
+Connections
+
+🟢 User 2                +
+🟢 User 3                +
+⚪ User 4                Offline
+🟢 User 5                Already in your Home
+🟢 User 6                3 in Home       +
+```
+
+---
+
+# 85. Invitation UI
+
+Use a global overlay mounted at the application root.
+
+Recommended architecture:
+
+```text
+AppShell
+ └── HomeInvitationProvider
+      └── InvitationOverlay
+```
+
+This means the user receives invitations regardless of the current page.
+
+---
+
+# 86. Invitation UI Behavior
+
+When invitation arrives:
+
+```text
+Show popup
+Start 20-second countdown
+```
+
+Example:
+
+```text
+┌────────────────────────────┐
+│ Rohan invited you to their │
+│ Home                       │
+│                            │
+│ Expires in 17s              │
+│                            │
+│ [Reject]      [Accept]     │
+└────────────────────────────┘
+```
+
+No separate page.
+
+---
+
+# 87. Home Full UI
+
+If acceptance fails because the Home is full:
+
+```text
+┌────────────────────────────┐
+│ Home is Full               │
+│                            │
+│ This Home has reached its  │
+│ maximum capacity.          │
+│                            │
+│            [OK]            │
+└────────────────────────────┘
+```
+
+The user should not see:
+
+```text
+HTTP 409
+CAPACITY_EXCEEDED
+database transaction failed
+```
+
+Those are internal.
+
+---
+
+# 88. Error Mapping
+
+Backend errors should use stable codes.
+
+Examples:
+
+```text
+HOME_FULL
+ALREADY_IN_HOME
+TARGET_ALREADY_IN_HOME
+TARGET_OFFLINE
+INVITATION_EXPIRED
+INVITATION_ALREADY_RESPONDED
+JOIN_REQUEST_EXPIRED
+JOIN_REQUEST_ALREADY_RESPONDED
+NOT_A_CONNECTION
+NOT_HOME_MEMBER
+NOT_HOME_OWNER
+HOME_DESTROYED
+USER_UNAVAILABLE
+```
+
+Frontend maps these to human-readable messages.
+
+---
+
+# 89. Error Handling Principle
+
+Never make frontend logic depend on raw backend message strings.
+
+Use:
+
+```text
+code
+```
+
+not:
+
+```text
+message === "Home is full"
+```
+
+This keeps localization and future UI changes easy.
+
+---
+
+# 90. Idempotency
+
+Home actions must be safe against duplicate requests.
+
+Example:
+
+User double-clicks Accept.
+
+Backend should not create:
+
+```text
+two memberships
+```
+
+Database constraints prevent that.
+
+The same principle applies to:
+
+* invite
+* join request
+* leave
+* remove
+* accept
+* reject
+
+---
+
+# 91. Rate Limiting
+
+Home actions should be rate-limited.
+
+Examples:
+
+```text
+invite
+join request
+accept
+reject
+```
+
+Especially:
+
+```text
+User 1 → sends 1000 invitations
+```
+
+This must not be allowed.
+
+Use the existing realtime/API rate-limit infrastructure as the foundation rather than introducing an unrelated limiter.
+
+---
+
+# 92. Invitation Spam Protection
+
+Add limits such as:
+
+```text
+per-user invitation rate
+per-target pending invitation
+per-Home pending invitations
+```
+
+Exact numeric limits should be configured centrally.
+
+Do not hardcode limits inside controllers.
+
+---
+
+# 93. Security
+
+Every Home operation must validate:
+
+```text
+authenticated user
+```
+
+and then:
+
+```text
+current membership
+current role
+current connection
+current target state
+current Home state
+```
+
+Never trust:
+
+```text
+homeId
+ownerId
+role
+memberCount
+```
+
+sent by the browser.
+
+---
+
+# 94. Frontend State
+
+RTK Query can handle server state.
+
+Create:
+
+```text
+homeApi
+```
+
+with:
+
+```text
+getHome
+getHomeConnections
+createInvitation
+acceptInvitation
+rejectInvitation
+createJoinRequest
+acceptJoinRequest
+rejectJoinRequest
+leaveHome
+removeHomeMember
+getVoiceToken
+```
+
+Realtime events should update/invalidate Home cache.
+
+---
+
+# 95. Do Not Put Everything in Redux
+
+Avoid creating a giant:
+
+```text
+homeSlice
+```
+
+containing every piece of Home state.
+
+Use:
+
+```text
+RTK Query → server state
+React context/hooks → live voice/session state
+local component state → dialogs/countdowns
+```
+
+This keeps responsibilities clear.
+
+---
+
+# 96. Voice State
+
+Voice state should be isolated.
+
+Example:
+
+```text
+HomeVoiceContext
+```
+
+contains:
+
+```text
+connectionState
+isMuted
+isSpeakerEnabled
+activeSpeakerIds
+participants
+```
+
+It should not own:
+
+```text
+HomeMembership
+Invitation
+JoinRequest
+```
+
+Those belong to Home state.
+
+---
+
+# 97. Realtime Hook
+
+Create:
+
+```text
+use-home-socket.ts
+```
+
+Responsibilities:
+
+* connect
+* authenticate
+* listen to Home events
+* dispatch cache updates/invalidation
+* reconnect
+* clean up
+
+It should not contain business rules.
+
+---
+
+# 98. Voice Provider Hook
+
+Create:
+
+```text
+use-home-voice.ts
+```
+
+Responsibilities:
+
+* get token
+* connect
+* disconnect
+* mute/unmute
+* detect active speakers
+* handle reconnect
+* handle provider errors
+
+It should not decide whether a user is allowed into the Home.
+
+The backend already decided that.
+
+---
+
+# 99. Home State Flow
+
+When user opens Home:
+
+```text
+GET /home
+     ↓
+Home state
+     ↓
+Render characters
+     ↓
+If member:
+    obtain voice token
+     ↓
+Connect voice
+```
+
+---
+
+# 100. Joining Flow
+
+User accepts invitation:
+
+```text
+Accept button
+      ↓
+POST /home/invitations/:id/accept
+      ↓
+Server transaction
+      ↓
+Membership created
+      ↓
+Response contains Home
+      ↓
+Frontend updates Home state
+      ↓
+Request voice token
+      ↓
+Connect voice
+      ↓
+Other members receive member:joined
+```
+
+---
+
+# 101. Invitation Flow
+
+User clicks `+`:
+
+```text
+POST /home/invitations
+      ↓
+Server validation
+      ↓
+Create invitation
+      ↓
+Realtime event
+      ↓
+Target sees popup
+```
+
+No manual polling should be necessary for a normal online user.
+
+---
+
+# 102. Reconnection Flow
+
+User temporarily loses network:
+
+```text
+Socket disconnected
+Voice disconnected
+```
+
+Do not:
+
+```text
+leave Home
+```
+
+Instead:
+
+```text
+Membership remains
+```
+
+When network returns:
+
+```text
+Socket reconnect
+      ↓
+GET /home
+      ↓
+Restore Home state
+      ↓
+Voice reconnect
+```
+
+---
+
+# 103. Application Restart
+
+If the browser is refreshed:
+
+```text
+Authenticate
+      ↓
+GET /home
+      ↓
+If member:
+    render Home
+    reconnect voice
+```
+
+The user should not have to accept another invitation.
+
+---
+
+# 104. Owner Refresh
+
+Owner refreshes the browser.
+
+Home remains.
+
+Owner reconnects automatically.
+
+---
+
+# 105. Owner Explicit Leave
+
+```text
+Leave button
+      ↓
+Confirmation
+      ↓
+POST /home/leave
+      ↓
+Destroy Home
+      ↓
+Disconnect voice
+      ↓
+All members receive home:destroyed
+      ↓
+Everyone returns to individual Home
+```
+
+---
+
+# 106. Participant Explicit Leave
+
+```text
+Leave
+ ↓
+POST /home/leave
+ ↓
+Membership removed
+ ↓
+Voice disconnected
+ ↓
+Other members receive member:left
+```
+
+---
+
+# 107. Owner Removes Participant
+
+```text
+Owner
+ ↓
+Remove User 3
+ ↓
+Backend validates owner
+ ↓
+Membership deleted
+ ↓
+Voice participant removed
+ ↓
+User 3 receives removed event
+ ↓
+User 3 returns to normal Home
+```
+
+---
+
+# 108. Character Data Flow
+
+Character data should flow like:
+
+```text
+Profile.characterConfig
+          ↓
+Home API
+          ↓
+HomeMember.characterConfig
+          ↓
+HomeCharacter
+          ↓
+CharacterAvatar
+          ↓
+male.glb / female.glb
+```
+
+No separate character API call per member.
+
+---
+
+# 109. Character Asset Loading
+
+The frontend should use:
+
+```text
+useGLTF
+```
+
+with cached model loading.
+
+React Three Fiber/Drei already provides the appropriate model-loading primitives for this architecture.
+
+Only load:
+
+```text
+male.glb
+```
+
+if a male character is actually needed.
+
+Only load:
+
+```text
+female.glb
+```
+
+if a female character is actually needed.
+
+Do not load both unnecessarily.
+
+---
+
+# 110. Asset Optimization
+
+The current GLBs are roughly 10 MB each.
+
+Before production:
+
+```text
+male.glb
+female.glb
+```
+
+should be optimized.
+
+Potential optimization:
+
+```text
+GLB
+ ↓
+Geometry optimization
+ ↓
+Texture optimization
+ ↓
+Compression
+ ↓
+Final web-ready GLB
+```
+
+Do not change the visual character merely for optimization.
+
+The goal is:
+
+> same character, smaller payload.
+
+---
+
+# 111. Character Loading States
+
+While models load:
+
+```text
+Home stage
+   ↓
+character placeholder
+```
+
+Do not show a blank screen.
+
+If WebGL fails:
+
+```text
+Static character fallback
+```
+
+The existing UI design documentation already calls for a static fallback when WebGL/device performance is unsuitable.
+
+---
+
+# 112. Character Component Boundaries
+
+Recommended final structure:
+
+```text
+src/components/home/
+│
+├── home-character-scene.tsx
+├── home-character.tsx
+├── home-character-label.tsx
+├── home-character-layout.ts
+├── home-character-camera.ts
+└── home-character-loading.tsx
+
+src/components/character/
+│
+├── character-model.tsx
+├── character-materials.ts
+└── character-assets.ts
+```
+
+The generic character renderer should be reusable.
+
+Home-specific behavior belongs under Home.
+
+---
+
+# 113. Generic Character Model
+
+```text
+CharacterModel
+```
+
+should know:
+
+```text
+CharacterConfig
+```
+
+and render the actual GLB.
+
+It should not know:
+
+```text
+HomeMember
+Home
+Voice
+Owner
+Presence
+```
+
+---
+
+# 114. Home Character
+
+```text
+HomeCharacter
+```
+
+combines:
+
+```text
+HomeMember
++
+CharacterModel
++
+Identity label
++
+Presence indicator
++
+Voice state
+```
+
+This is the correct boundary.
+
+---
+
+# 115. Future Character Features
+
+Because the character system is separated, future features can add:
+
+```text
+animations
+emotes
+expressions
+outfits
+accessories
+gestures
+speaking animation
+idle animation
+```
+
+without rewriting Home membership.
+
+---
+
+# 116. Future Home Features
+
+Similarly, Home can later add:
+
+```text
+reactions
+shared activities
+music
+emotes
+games
+interactive objects
+shared media
+```
+
+without replacing the membership system.
+
+This is why Home must be treated as a subsystem.
+
+---
+
+# 117. Testing Strategy
+
+Testing should not start with only UI testing.
+
+We need four levels.
+
+```text
+Unit
+Integration
+Realtime
+End-to-end
+```
+
+---
+
+# 118. Unit Tests
+
+Test:
+
+```text
+HomePolicyService
+HomeMembershipService
+HomeInvitationService
+HomeJoinRequestService
+HomeVoiceService
+HomeCharacterLayout
+```
+
+Examples:
+
+```text
+cannot join when full
+cannot join two Homes
+participant cannot remove
+owner can remove
+offline member remains
+owner leave destroys Home
+```
+
+---
+
+# 119. Database Integration Tests
+
+Test concurrency.
+
+Critical test:
+
+```text
+Home has 3 members
+
+User 5 accepts
+User 6 accepts
+
+simultaneously
+```
+
+Expected:
+
+```text
+Exactly one succeeds.
+Exactly four members maximum.
+```
+
+---
+
+# 120. Invitation Tests
+
+Test:
+
+```text
+accept
+reject
+expire
+duplicate accept
+accept after expiry
+accept after Home destruction
+accept when full
+accept after capacity becomes available
+```
+
+---
+
+# 121. Join Request Tests
+
+Test:
+
+```text
+request
+accept
+reject
+expire
+duplicate request
+request while already in Home
+target leaves Home
+target gets removed
+Home becomes full
+Home becomes available again
+```
+
+---
+
+# 122. Permission Tests
+
+Test:
+
+```text
+owner remove → allowed
+
+participant remove → denied
+
+owner destroy → allowed
+
+participant destroy → denied
+```
+
+---
+
+# 123. Realtime Tests
+
+Test:
+
+```text
+invitation:new
+join-request:new
+member:joined
+member:left
+member:removed
+home:destroyed
+```
+
+Verify correct recipients.
+
+---
+
+# 124. Voice Tests
+
+Test:
+
+```text
+join
+leave
+mute
+unmute
+reconnect
+network loss
+browser refresh
+owner disconnect
+participant disconnect
+owner removal
+Home destruction
+```
+
+---
+
+# 125. Frontend E2E Scenarios
+
+At minimum:
+
+### Scenario 1
+
+```text
+User 1 invites User 2
+User 2 accepts
+Both see each other
+Both hear each other
+```
+
+### Scenario 2
+
+```text
+User 1 invites 7 users
+First 3 join
+Remaining invitations remain
+Remaining user accepts
+Home Full appears
+```
+
+### Scenario 3
+
+```text
+Member leaves
+Previously full Home becomes available
+Pending invitation succeeds
+```
+
+### Scenario 4
+
+```text
+Participant goes offline
+Character remains
+Participant returns
+Character reconnects
+Voice reconnects
+```
+
+### Scenario 5
+
+```text
+Owner leaves
+Everyone returns to individual Home
+```
+
+### Scenario 6
+
+```text
+User 1 is in Home A
+User 2 is in Home B
+They are connections
+Neither can invite/request the other
+```
+
+---
+
+# 126. Observability
+
+Because this is a core feature, add structured logs.
+
+Events:
+
+```text
+home.created
+home.member.joined
+home.member.left
+home.member.removed
+home.destroyed
+home.invitation.created
+home.invitation.accepted
+home.invitation.rejected
+home.invitation.expired
+home.join_request.created
+home.join_request.accepted
+home.join_request.rejected
+home.join_request.expired
+home.voice.connected
+home.voice.disconnected
+home.voice.reconnected
+```
+
+Do not log microphone/audio content.
+
+---
+
+# 127. Metrics
+
+Track:
+
+```text
+active Homes
+members per Home
+invitation acceptance rate
+invitation expiration rate
+join request acceptance rate
+Home full rejection rate
+voice connection failures
+voice reconnect rate
+average Home lifetime
+```
+
+These metrics will tell us whether the feature actually works in production.
+
+---
+
+# 128. Error Monitoring
+
+Sentry should capture:
+
+```text
+voice token failures
+voice provider failures
+Home transaction failures
+unexpected membership violations
+realtime synchronization errors
+character loading errors
+WebGL errors
+```
+
+The current backend already has Sentry integration.
+
+---
+
+# 129. Frontend Error Boundary
+
+The 3D Home should not be allowed to crash the entire application.
+
+Use:
+
+```text
+HomeCharacterErrorBoundary
+```
+
+If rendering fails:
+
+```text
+Fallback UI
+```
+
+while:
+
+```text
+Connections
+Messages
+Navigation
+```
+
+continue functioning.
+
+---
+
+# 130. Performance
+
+Important optimizations:
+
+### 1
+
+Reuse loaded GLB assets.
+
+### 2
+
+Clone scene instances safely.
+
+### 3
+
+Do not create a separate Canvas per character.
+
+Use:
+
+```text
+ONE Canvas
+FOUR characters
+```
+
+not:
+
+```text
+FOUR Canvas elements
+```
+
+### 4
+
+Do not recreate character scenes unnecessarily.
+
+### 5
+
+Use stable `userId` keys.
+
+### 6
+
+Optimize GLB assets.
+
+### 7
+
+Use appropriate DPR limits on mobile.
+
+---
+
+# 131. One Canvas Rule
+
+The Home should have:
+
+```text
+<Canvas>
+   Character 1
+   Character 2
+   Character 3
+   Character 4
+</Canvas>
+```
+
+Not:
+
+```text
+<Canvas>Character 1</Canvas>
+<Canvas>Character 2</Canvas>
+<Canvas>Character 3</Canvas>
+<Canvas>Character 4</Canvas>
+```
+
+One renderer is much easier to manage and reduces duplicated WebGL contexts.
+
+---
+
+# 132. Voice and Character Separation
+
+The character scene should never directly depend on the LiveKit/voice SDK.
+
+Bad:
+
+```text
+CharacterAvatar → LiveKit
+```
+
+Good:
+
+```text
+Home
+ ├── CharacterState
+ └── VoiceState
+```
+
+Then Home combines them.
+
+This prevents the 3D system from becoming coupled to the voice provider.
+
+---
+
+# 133. Suggested Final Frontend Architecture
+
+```text
+HomePage
+│
+└── HomeProvider
+    │
+    ├── HomeQuery
+    ├── HomeRealtime
+    └── HomeVoice
+          │
+          └── HomeStage
+              │
+              ├── HomeCharacterScene
+              │    ├── HomeCharacter
+              │    ├── HomeCharacter
+              │    ├── HomeCharacter
+              │    └── HomeCharacter
+              │
+              ├── HomeControls
+              └── HomeMemberOverlay
+```
+
+Outside the stage:
+
+```text
+InvitationOverlay
+JoinRequestOverlay
+ConnectionsDialog
+HomeFullDialog
+```
+
+---
+
+# 134. Suggested Final Backend Architecture
+
+```text
+API
+│
+└── HomeModule
+    │
+    ├── HomeService
+    ├── HomeMembershipService
+    ├── HomeInvitationService
+    ├── HomeJoinRequestService
+    ├── HomePolicyService
+    └── HomeVoiceService
+             │
+             └── VoiceProvider
+                    └── LiveKitProvider
+
+Realtime
+│
+└── HomeGateway
+       │
+       ├── authentication
+       ├── realtime events
+       └── synchronization
+
+Redis
+│
+└── fanout / ephemeral coordination
+
+PostgreSQL
+│
+└── authoritative Home state
+```
+
+---
+
+# 135. Implementation Phases
+
+The implementation should be executed in phases.
+
+---
+
+## Phase 0 — Repository Baseline
+
+Before changing code:
+
+* create feature branch
+* verify frontend build
+* verify backend build
+* verify realtime build
+* run existing tests
+* document baseline
+
+Do not start feature development until baseline is green.
+
+---
+
+# Phase 1 — Domain Foundation
+
+Implement:
+
+```text
+Home
+HomeMembership
+HomeInvitation
+HomeJoinRequest
+```
+
+Add Prisma migration.
+
+Add indexes and uniqueness constraints.
+
+Add domain enums.
+
+Add tests.
+
+No UI yet.
+
+---
+
+# Phase 2 — Home Business Logic
+
+Implement:
+
+```text
+HomeService
+HomeMembershipService
+HomePolicyService
+```
+
+Implement:
+
+* create/find Home
+* membership validation
+* capacity validation
+* one-Home rule
+* owner rule
+* leave
+* remove
+* destroy
+
+Write unit/integration tests.
+
+---
+
+# Phase 3 — Invitations
+
+Implement:
+
+```text
+HomeInvitationService
+```
+
+Add:
+
+```text
+POST /home/invitations
+POST /home/invitations/:id/accept
+POST /home/invitations/:id/reject
+```
+
+Implement:
+
+* 20-second expiration
+* duplicate protection
+* Home full behavior
+* concurrency protection
+* invitation invalidation
+
+---
+
+# Phase 4 — Join Requests
+
+Implement:
+
+```text
+HomeJoinRequestService
+```
+
+Add:
+
+```text
+POST /home/join-requests
+POST /home/join-requests/:id/accept
+POST /home/join-requests/:id/reject
+```
+
+Implement target-member semantics.
+
+---
+
+# Phase 5 — Home Read APIs
+
+Implement:
+
+```text
+GET /home
+GET /home/connections
+```
+
+Return everything required to render Home without per-member API calls.
+
+---
+
+# Phase 6 — Realtime Home Gateway
+
+Add:
+
+```text
+src/realtime/home-gateway/
+```
+
+Implement:
+
+```text
+home:invitation:new
+home:join-request:new
+home:member:joined
+home:member:left
+home:member:removed
+home:destroyed
+home:state
+```
+
+Connect it to existing Redis fanout.
+
+---
+
+# Phase 7 — Voice Provider
+
+Add:
+
+```text
+HomeVoiceProvider
+LiveKitHomeVoiceProvider
+```
+
+Configure:
+
+```text
+LIVEKIT_URL
+LIVEKIT_API_KEY
+LIVEKIT_API_SECRET
+```
+
+Implement token generation.
+
+Do not expose API secret to frontend.
+
+---
+
+# Phase 8 — Voice Connection Lifecycle
+
+Implement:
+
+```text
+join
+connect
+disconnect
+reconnect
+mute
+unmute
+remove
+destroy
+```
+
+Ensure temporary disconnection does not destroy Home membership.
+
+---
+
+# Phase 9 — Frontend Home State
+
+Create:
+
+```text
+src/features/home/
+```
+
+Implement:
+
+```text
+home-api.ts
+use-home.ts
+use-home-actions.ts
+use-home-socket.ts
+```
+
+Connect Home state to existing authentication.
+
+---
+
+# Phase 10 — Character Rendering Refactor
+
+Refactor current:
+
+```text
+src/components/character/avatar.tsx
+src/components/character/character-scene.tsx
+```
+
+into reusable components.
+
+Keep:
+
+```text
+male.glb
+female.glb
+```
+
+Fix:
+
+* stable keys
+* material isolation
+* material mapping
+* model caching
+* layout
+* camera
+* responsive framing
+* loading
+* fallback
+
+---
+
+# Phase 11 — Multi-Character Home
+
+Implement:
+
+```text
+HomeCharacterScene
+```
+
+Support:
+
+```text
+1
+2
+3
+4
+```
+
+characters.
+
+Add:
+
+```text
+displayName
+owner state
+offline state
+speaking state
+```
+
+---
+
+# Phase 12 — Connections Experience
+
+Implement:
+
+```text
+HomeConnectionsDialog
+```
+
+States:
+
+```text
+AVAILABLE
+OFFLINE
+MY_HOME
+OTHER_HOME
+```
+
+Add:
+
+```text
++
+```
+
+actions.
+
+---
+
+# Phase 13 — Global Invitations
+
+Mount:
+
+```text
+HomeInvitationProvider
+```
+
+at application level.
+
+Implement:
+
+```text
+20-second timer
+Accept
+Reject
+Expire
+Home Full
+```
+
+No dedicated page.
+
+---
+
+# Phase 14 — Join Requests
+
+Implement global request UI.
+
+Example:
+
+```text
+User 1 wants to join your Home
+
+[Accept]
+[Reject]
+```
+
+No room terminology.
+
+---
+
+# Phase 15 — Voice UI
+
+Implement:
+
+```text
+Mute
+Speaker
+Leave
+```
+
+Owner:
+
+```text
+Remove
+```
+
+Participant:
+
+```text
+No remove
+```
+
+---
+
+# Phase 16 — Reconnection
+
+Test:
+
+```text
+WiFi off
+WiFi on
+browser tab sleep
+browser refresh
+temporary realtime disconnect
+voice reconnect
+```
+
+Ensure membership survives.
+
+---
+
+# Phase 17 — Character Asset Optimization
+
+Optimize:
+
+```text
+male.glb
+female.glb
+```
+
+without changing the visual appearance.
+
+Verify:
+
+```text
+Desktop
+Mobile
+Low-end device
+Slow network
+```
+
+---
+
+# Phase 18 — Security and Abuse Prevention
+
+Implement:
+
+* rate limits
+* authorization
+* duplicate protection
+* invitation spam protection
+* join-request spam protection
+* membership validation
+* provider token validation
+* owner-only removal
+
+---
+
+# Phase 19 — Automated Testing
+
+Complete:
+
+```text
+unit
+integration
+concurrency
+realtime
+voice
+frontend
+E2E
+```
+
+tests.
+
+---
+
+# Phase 20 — Production Observability
+
+Add:
+
+* structured logs
+* metrics
+* Sentry
+* voice connection monitoring
+* Home lifecycle monitoring
+* failure tracking
+
+---
+
+# Phase 21 — UAT
+
+Create a dedicated UAT matrix.
+
+Minimum users:
+
+```text
+User 1
+User 2
+User 3
+User 4
+User 5
+User 6
+User 7
+User 8
+```
+
+Test:
+
+```text
+invite
+accept
+reject
+expire
+full
+leave
+remove
+offline
+reconnect
+two Homes
+simultaneous acceptance
+owner disconnect
+owner leave
+participant leave
+join request
+```
+
+---
+
+# Phase 22 — Production Rollout
+
+Roll out gradually.
+
+Recommended order:
+
+```text
+Database
+ ↓
+Backend API
+ ↓
+Realtime
+ ↓
+Voice infrastructure
+ ↓
+Frontend
+ ↓
+Feature flag
+ ↓
+Internal testing
+ ↓
+UAT
+ ↓
+Production
+```
+
+The feature should be behind a feature flag during rollout.
+
+---
+
+# 136. Feature Flag
+
+Use a server-controlled feature flag if possible.
+
+Example:
+
+```text
+HOME_SOCIAL_VOICE_ENABLED
+```
+
+This allows:
+
+```text
+disabled
+ ↓
+internal users
+ ↓
+small percentage
+ ↓
+all users
+```
+
+without reverting code.
+
+---
+
+# 137. Future Extensibility
+
+The architecture must allow future features such as:
+
+```text
+Home reactions
+Home emotes
+Character animations
+Speaking animation
+Shared activities
+Music
+Games
+Interactive Home objects
+Home themes
+More character customization
+Additional Home member states
+```
+
+without modifying:
+
+```text
+HomeMembershipService
+```
+
+for every new feature.
+
+---
+
+# 138. What We Should NOT Do
+
+Do not build:
+
+```text
+one giant HomeService
+```
+
+Do not put business logic inside Socket.IO handlers.
+
+Do not let the frontend decide capacity.
+
+Do not use Socket.IO to transport microphone audio.
+
+Do not make Redis the source of truth.
+
+Do not create one Canvas per character.
+
+Do not create one API request per Home member.
+
+Do not use array indexes as character keys.
+
+Do not expose room IDs to users.
+
+Do not expose LiveKit/provider concepts to users.
+
+Do not destroy membership when a socket disconnects.
+
+Do not treat offline as leave.
+
+Do not reserve Home slots for pending invitations.
+
+Do not put Home-specific character data into every social profile response.
+
+---
+
+# 139. Current Codebase Integration
+
+The feature should fit the current codebase rather than replacing it.
+
+### Frontend existing pieces to reuse
+
+```text
+src/pages/home-page.tsx
+src/components/character/
+src/types/domain.ts
+src/lib/normalizers.ts
+src/rtk/profile/
+src/rtk/connections/
+src/lib/realtime.ts
+src/components/layout/app-shell.tsx
+```
+
+The current Home already lazy-loads the CharacterScene, and the current project already has the character GLBs and R3F stack.
+
+### Backend existing pieces to reuse
+
+```text
+src/core/prisma/
+src/core/redis/
+src/realtime/realtime-auth/
+src/realtime/presence/
+src/realtime/fanout/
+src/realtime/realtime-rate-limit/
+src/apps/realtime/
+```
+
+The backend already has separate API/realtime/worker applications and Redis-backed realtime infrastructure.
+
+---
+
+# 140. Final Character Decision
+
+## Keep the current character system.
+
+We do **not** need to replace the characters.
+
+The current architecture is already close to what we need:
+
+```text
+React
+ ↓
+React Three Fiber
+ ↓
+Three.js
+ ↓
+GLB
+```
+
+The current `CharacterScene` even already accepts multiple character configs.
+
+But we should refactor it before using it for the production Home feature.
+
+The target is:
+
+```text
+Current
+
+CharacterScene
+ └── CharacterAvatar
+
+
+Production
+
+HomeCharacterScene
+ ├── HomeCharacter
+ │    └── CharacterModel
+ ├── HomeCharacter
+ │    └── CharacterModel
+ ├── HomeCharacter
+ │    └── CharacterModel
+ └── HomeCharacter
+      └── CharacterModel
+```
+
+One Canvas.
+
+Up to four characters.
+
+Stable user identity.
+
+Independent materials.
+
+Responsive layout.
+
+Offline state.
+
+Voice state.
+
+Future animation support.
+
+---
+
+# 141. Final Architecture
+
+The complete system becomes:
+
+```text
+                         HIROTOLI HOME
+                              │
+                ┌─────────────┴─────────────┐
+                │                           │
+          Home Domain                  Home UI
+                │                           │
+        ┌───────┼────────┐          ┌───────┼────────┐
+        │       │        │          │       │        │
+      Home   Members  Requests   Characters Voice  Controls
+        │       │        │          │       │
+        └───────┼────────┘          │       │
+                │                   │       │
+            PostgreSQL              │    Voice SFU
+                │                   │
+              Redis                 │
+                │                   │
+            Realtime ───────────────┘
+                │
+             Socket.IO
+```
+
+The most important separation is:
+
+```text
+PostgreSQL
+    ↓
+Who belongs to the Home?
+
+Redis / Socket.IO
+    ↓
+Who needs to know about changes?
+
+Voice SFU
+    ↓
+Who is currently connected to audio?
+
+React Three Fiber
+    ↓
+Who should visually appear in the Home?
+```
+
+Each system has one clear responsibility.
+
+---
+
+# 142. Definition of Done
+
+The feature is not considered production-ready until all of the following are true:
+
+### Product
+
+* [ ] User never needs to understand the concept of a room.
+* [ ] Home feels like a natural shared social space.
+* [ ] Invitations work globally.
+* [ ] Join requests work globally.
+* [ ] Home capacity is enforced.
+* [ ] Offline members remain visible.
+* [ ] Members automatically reconnect.
+* [ ] Owner destruction works.
+* [ ] Different Homes cannot interact through Home invitations.
+
+### Backend
+
+* [ ] Database constraints enforce one Home per user.
+* [ ] Database/transactions enforce max 4.
+* [ ] Permissions are server-side.
+* [ ] Requests are idempotent.
+* [ ] Invitations expire.
+* [ ] Join requests expire.
+* [ ] Concurrency is handled.
+* [ ] Rate limits exist.
+* [ ] Realtime events synchronize state.
+* [ ] Voice tokens are secure.
+
+### Frontend
+
+* [ ] Home renders 1–4 characters.
+* [ ] Current character assets remain usable.
+* [ ] Character instances are isolated.
+* [ ] Character identity is shown.
+* [ ] Offline state is shown.
+* [ ] Owner is identifiable.
+* [ ] Voice state is represented.
+* [ ] Home is responsive.
+* [ ] WebGL fallback exists.
+* [ ] Invitation overlay works everywhere.
+* [ ] Home-full state is handled cleanly.
+
+### Voice
+
+* [ ] Audio uses SFU infrastructure.
+* [ ] Socket.IO is not used for audio.
+* [ ] Reconnection works.
+* [ ] Mute works.
+* [ ] Local mute works.
+* [ ] Owner removal disconnects participant.
+* [ ] Owner leaving destroys voice session.
+
+### Operations
+
+* [ ] Logs exist.
+* [ ] Metrics exist.
+* [ ] Sentry errors are captured.
+* [ ] Feature flag exists.
+* [ ] UAT matrix passes.
+* [ ] Load/concurrency testing passes.
+
+---
+
+# 143. Final Engineering Principle
+
+The implementation should follow this rule:
+
+> **Simple for the user, strict for the server, modular for the developer.**
+
+The user should experience:
+
+```text
+Click +
+Accept
+Boom — we're together.
+```
+
+But underneath that simple interaction:
+
+```text
+Authentication
+      ↓
+Connection validation
+      ↓
+Home membership validation
+      ↓
+Capacity validation
+      ↓
+Concurrency protection
+      ↓
+Database transaction
+      ↓
+Realtime synchronization
+      ↓
+Voice authorization
+      ↓
+Voice connection
+      ↓
+Character synchronization
+      ↓
+Reconnect handling
+```
+
+That complexity belongs **inside the platform**, not inside the user's experience.
+
+This is what makes the feature a proper Hirotoli core subsystem rather than a side feature.
