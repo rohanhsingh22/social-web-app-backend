@@ -1,0 +1,14 @@
+Hirotoli asset license record (spec §13)
+========================================
+
+asset name: Quaternius Universal Animation Library (candidate)
+creator: Quaternius
+source URL: https://quaternius.itch.io/universal-animation-library
+download/version date: 2026-10-07 (candidate review; NOT yet shipped)
+license: Creative Commons Zero v1.0 Universal (CC0) — as listed on source page at review time
+license URL: https://creativecommons.org/publicdomain/zero/1.0/
+asset version: latest available at review time (to be pinned at art-approval)
+where used: future /hirotoli/characters/animations/* (launch subset only: idle, wave, happy, sad, celebrate, interaction-ready; pending Phase 1 approval)
+whether modified: no (evaluation only)
+whether redistributed: no (not committed)
+notes: Candidate per spec §10 (120+ humanoid animations). Launch MUST NOT load all 120+ clips. Animation assets stay independently loadable; controller cross-fades by logical name. Respect prefers-reduced-motion; fallback to idle on error.

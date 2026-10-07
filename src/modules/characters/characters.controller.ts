@@ -34,6 +34,13 @@ export class CharactersController {
     });
   }
 
+  @Get('animations')
+  async animations() {
+    return envelope({
+      animations: this.characters.listAnimations(),
+    });
+  }
+
   @Get('me')
   async getMine(@CurrentUser() user: AuthenticatedUser) {
     const [character, owned, inventory, coins] = await Promise.all([

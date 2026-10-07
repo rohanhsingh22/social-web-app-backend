@@ -1,0 +1,52 @@
+HIROTOLI PHASE 1 — ART-DIRECTION REVIEW AND APPROVAL RECORD
+============================================================
+Date: 2026-10-07. Status: CANDIDATE APPROVED for Phase 2 integration.
+Final visual sign-off: PENDING user UAT (Phase 11). No binaries shipped;
+no production code references candidate URLs (exit gate holds).
+
+1. SOURCE VERIFICATION (all live, CC0 confirmed 2026-10-07)
+- Universal Base Characters (122 MB standard): 6 models, Regular/Teen/
+  Superhero proportions, Humanoid rig, ~13k tris, 20 hairstyles,
+  eye/skin color customization.
+- Modular Outfits Fantasy v2.1 (280 MB): 12 outfits / 62 parts / 3
+  textures each, improved modularity (less clipping).
+- Animation Library v3.0 (15 MB standard): 120+ clips, 30fps, root-motion
+  and no-root-motion variants.
+- Village MegaKit (153 MB): 300+ grid-fit modular pieces, FBX/OBJ/glTF.
+- Props MegaKit (143 MB): 200+ models on 4 shared texture sets.
+- Nature MegaKit (99 MB): 116 models (40 trees, 35 plants/flowers,
+  27 rocks), stylized Ghibli-inspired look.
+
+2. COMPARISONS (spec tasks 9-13)
+- Proportions: Regular Female (character-01 Aria) / Regular Male
+  (character-02 Kai) selected; match existing fallback scale; shared
+  Humanoid rig keeps animations/equipment compatible. Teen/Superhero
+  rejected for launch.
+- Head/hair: 20-style pack pool; launch pins 1 style per character in
+  Phase 2. Eye/skin customization reserved (not launch scope).
+- Outfit quality: v2.1 modularity fix de-risks clipping; casual/peasant
+  pieces preferred over noble/wizard/knight (cozy social direction).
+- Village style: cozy social village (paths, gardens, plaza, fountain,
+  bridge, benches, lanterns). Castles/fortifications/weapons/dungeons
+  explicitly rejected — must not read as medieval RPG.
+- Character/world consistency: single creator (Quaternius), shared
+  stylized low-poly aesthetic, shared Humanoid rig, warm daytime palette
+  on both sides. No style clash expected; confirm visually in Phase 5.
+
+3. PERFORMANCE FIT (targets, not measurements)
+- ~13k tris/character x4 = well within mobile budgets; low-poly env;
+  15 MB animation standard zip but only 6 clips ship (independently
+  loadable); 4 shared prop texture sets limit state changes.
+
+4. DECISION
+- character-01 / character-02: CANDIDATE APPROVED (Regular Female/Male).
+- Initial outfits (top/bottom/headwear/eyewear subset): APPROVED.
+- Village subset (3 houses, plaza, fountain, bridge, paths, sky):
+  APPROVED.
+- Props/nature subset (benches, lanterns, signs, trees, bushes/flowers,
+  rocks): APPROVED.
+- License gate: re-verify CC0 at download/commit time; pin exact
+  versions/zip checksums in Phase 2; never ship full packs.
+
+5. NEXT (Phase 2): download pinned versions, integrate behind stable IDs
+with legacy fallback, keep old GLB/world paths for rollback.

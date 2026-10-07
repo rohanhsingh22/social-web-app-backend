@@ -1,0 +1,14 @@
+Hirotoli asset license record (spec §13)
+========================================
+
+asset name: Quaternius Universal Base Characters (candidate)
+creator: Quaternius
+source URL: https://quaternius.itch.io/universal-base-characters
+download/version date: 2026-10-07 (candidate review; NOT yet shipped)
+license: Creative Commons Zero v1.0 Universal (CC0) — as listed on source page at review time
+license URL: https://creativecommons.org/publicdomain/zero/1.0/
+asset version: latest available at review time (to be pinned at art-approval)
+where used: future /hirotoli/characters/base/character-01, character-02 (pending Phase 1 approval)
+whether modified: no (evaluation only)
+whether redistributed: no (not committed)
+notes: Strong production candidate per spec §8 (6 base models, male/female variants, Humanoid rig, ~13k tris, 20 hairstyles, Universal Animation Library compatible). Release gate: license MUST be re-verified at commit/shipping time. No asset is production-approved merely because it is free to download. Current launch still serves compatibility fallback GLBs (/character-scene/female.glb, /character-scene/male.glb) behind stable IDs character-01/character-02.

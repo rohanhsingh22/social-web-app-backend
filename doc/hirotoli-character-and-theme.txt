@@ -1,528 +1,1274 @@
-HiRotoli — Production Character System & Default Home World
+HIROTOLI — PRODUCTION-READY CHARACTER + HOME WORLD THEME IMPLEMENTATION SPECIFICATION
 
-Implementation Specification | Launch: Two Free Characters + One Permanent Hirotoli Home Theme
+Document status
 
-1. Executive Decision
+Production implementation specification
 
-This document defines the production foundation for the character system and the permanent 3D Home world. It is not the generic light/dark/accent application theme.
+Basis
 
-Launch with exactly two free characters.
+This document is based on the latest Hirotoli frontend and backend ZIPs
+supplied for this implementation, including the existing character,
+Home, world-theme, realtime, voice, Prisma and API foundations.
 
-Launch with one permanent default Hirotoli Home world used whenever no event is active.
+The document deliberately separates: 1. What already exists in the
+current codebase. 2. What must be replaced or completed. 3. What must be
+added for production. 4. What is future-ready but must NOT be
+implemented in launch scope.
 
-Future characters can be unlocked with Event Coins, but the launch catalog remains only two characters.
+IMPORTANT: Do not start by rewriting the existing Home or Character
+architecture. The current repository already contains useful production
+boundaries. The implementation should preserve those boundaries and
+replace the incomplete visual/asset layer underneath them.
 
-Future cosmetics can be event rewards and remain owned after an event ends.
+====================================================================== 1.
+PRODUCT GOAL
+======================================================================
 
-Future events must add a theme/world layer instead of requiring a new Home implementation.
+The launch goal is intentionally small:
 
-Keep the existing application light/dark/system + accent preference system separate.
+Open Home -> See a beautiful Hirotoli 3D village -> See your own 3D
+character -> See other Home members when they are present -> Chat with
+Home members -> Talk using Home voice
 
-2. Current Home — Source of Truth
+Launch does NOT include: - character walking - running - jumping - free
+camera exploration - Home construction - furniture placement - room
+decoration editor - large character marketplace - battle pass - gacha -
+event currency at launch - multiple independent Home worlds - a full
+avatar creator - a large animation library loaded into Home
 
-The latest HiRotoli page blueprint defines Home as the personal home base, distinct from the social feed. The 3D character is the focal point. Desktop uses a hero split with welcoming text/CTAs and a character stage; public-room/Toli entry cards remain below. The blueprint also requires WebGL fallback, model-loading state, reduced-motion handling and responsive mobile behavior.
+The implementation must nevertheless be architected so those
+capabilities can be added later without rewriting CharacterRenderer or
+HomeWorld.
 
-Current entry points: src/pages/home-page.tsx
+======================================================================
+2. CORE PRODUCT MODEL
+======================================================================
 
-Current character area: src/components/character/*
+Hirotoli has three different visual/domain concepts that MUST NOT be
+mixed.
 
-Implementation rule: preserve existing Home behavior and API contracts while replacing the limited character/world layer underneath it.
+A. Global application UI theme
 
-3. Current Character — Problems to Solve
+This is the existing application preference system.
 
-The inspected current CharacterConfig is centered on gender plus optional skin, hair and outfit colors. CharacterAvatar selects male.glb/female.glb, clones/centers the scene and recolors meshes based on mesh-name conventions. The current GLBs contain humanoid skeletons but no embedded animations.
+It controls: - light mode - dark mode - system mode - UI accent
 
-Current assets:
-public/character-scene/male.glb
-public/character-scene/female.glb
+Existing frontend location: - src/lib/theme.ts -
+src/components/theme/* - src/components/providers/theme-provider.tsx
 
-Not a general equipment/inventory system.
+This system controls the application UI.
 
-No reusable attachment/socket abstraction.
+It does NOT control the identity of the 3D Home world.
 
-No proper animation-controller layer.
+B. Permanent Home World Theme
 
-Character identity is too tightly coupled to gender/color fields.
+This is the actual 3D environment displayed inside Home.
 
-Future hats, glasses, outfits and event cosmetics would become hardcoded additions.
+Example: - Hirotoli Village
 
-4. Target Architecture
+It controls: - sky/background - ground - environment geometry -
+lighting - fog - particles - decorative props - ambient audio -
+character stage - camera framing
 
-Character
-├── Base Model
-├── Appearance
-│   ├── Skin
-│   ├── Hair
-│   └── Face/Eyes where supported
-├── Equipment
-│   ├── Hair
-│   ├── Outfit Top
-│   ├── Outfit Bottom
-│   ├── Full Outfit
-│   ├── Headwear
-│   ├── Eyewear
-│   ├── Facewear
-│   ├── Footwear
-│   └── Accessories
-├── Animation Controller
-└── Renderer
+C. Future Event Theme Layer
 
-The renderer receives a validated character definition + loadout. It must not know why an item was granted.
+This is a temporary server-authoritative visual layer.
 
-5. Launch Character Scope
+Example: Hirotoli Village + The First Night event layer
 
-Character
+The event layer may change: - sky - lighting - atmosphere - particles -
+decorations - audio - event props
 
-Launch
+When the event ends, the event layer disappears and the permanent
+Hirotoli Village returns.
 
-Future
+The global light/dark UI preference must remain independent from both.
 
-Character 01
+======================================================================
+3. CURRENT CODEBASE — WHAT ALREADY EXISTS
+======================================================================
 
-Free
+The latest repository already contains a substantial foundation.
 
-Cosmetics can be added
+Frontend character boundaries
 
-Character 02
+Existing: src/components/character/ CharacterRenderer.tsx
+CharacterStage.tsx CharacterEquipment.tsx
+CharacterAnimationController.ts character-catalog.ts character-types.ts
+character-model.tsx character-materials.ts character-assets.ts
+character-equipment-slots.ts use-character-clip.ts
 
-Free
+The current code already introduces: - stable character IDs - character
+definitions - loadouts - equipment slots - material isolation -
+character rendering abstraction - animation-controller abstraction -
+fallback behavior
 
-Cosmetics can be added
+This architecture should be preserved.
 
-Character 03+
+Frontend Home/world boundaries
 
-Not shipped
+Existing: src/components/home/ HomeWorld.tsx HomeEnvironment.tsx
+HomeLighting.tsx HomeAtmosphere.tsx HomeDecorations.tsx
+HomeThemeResolver.ts home-default-theme.ts home-world-types.ts
+HomeEventProps.tsx HomeSky.tsx HomeAmbientAudio.tsx HomeLobbySet.tsx
+HomePerfProbe.tsx home-webgl.ts home-character-scene.tsx
+home-character-camera.ts home-character-layout.ts
 
-Unlock with Event Coins later
+This is already the correct direction for a theme-driven Home renderer.
 
-Use stable character IDs. Do not make gender the permanent identity key.
+Backend Home/world boundaries
 
-6. Character Data Model
+Existing: src/modules/home/ home.service.ts home-membership.service.ts
+home-policy.service.ts home-presence.service.ts
+home-invitation.service.ts home-join-request.service.ts
+world/home-default-theme.ts world/home-theme-resolver.ts
+world/home-world-types.ts voice/home-voice.service.ts
+voice/livekit-home-voice.provider.ts
 
-type CharacterDefinition = {
-  id: string;
-  name: string;
-  assetId: string;
-  rigId: string;
-  defaultLoadoutId: string;
-  unlock: { type: "free" | "event_coins"; amount?: number };
-};
+The backend also contains Prisma models for: - Home - HomeMembership -
+HomeInvitation - HomeJoinRequest - Character - CharacterItem -
+UserCharacter - UserCharacterItem - HomeWorldThemeLayer
 
-type CharacterLoadout = {
-  characterId: string;
-  skinId?: string;
-  hairId?: string;
-  outfitTopId?: string;
-  outfitBottomId?: string;
-  fullOutfitId?: string;
-  headwearId?: string;
-  eyewearId?: string;
-  facewearId?: string;
-  footwearId?: string;
-  accessoryIds: string[];
-};
+This means the system already has the correct domain direction.
 
-Server validation is required before saving a loadout: ownership, compatibility, exclusive slots and valid asset IDs must be checked server-side.
+======================================================================
+4. CURRENT CHARACTER IMPLEMENTATION — WHAT MUST CHANGE
+======================================================================
 
-7. Equipment / Wardrobe
+The current character catalog maps two launch characters to:
 
-type CharacterItem = {
-  id: string;
-  category:
-    | "hair" | "outfit_top" | "outfit_bottom" | "full_outfit"
-    | "headwear" | "eyewear" | "facewear" | "footwear" | "accessory";
-  assetId: string;
-  rigId: string;
-  attachment:
-    | { type: "skinned" }
-    | { type: "bone"; boneName: string }
-    | { type: "socket"; socketName: string };
-  compatibleCharacterIds: string[];
-  source: { type: "base" | "event" | "system"; eventId?: string };
-};
+character-01 -> /character-scene/female.glb character-02 ->
+/character-scene/male.glb
 
-Attachment behavior belongs in the equipment system, not scattered through Home components.
+These are the current Ready Player Me/Visage-derived GLBs already in the
+repository.
 
-8. Animation Layer
-
-Animations must be independent from the base character model. Initial set:
-
-Idle
-
-Wave / greeting
-
-Happy reaction
-
-Sad reaction
-
-Celebrate
-
-Interaction-ready
-
-The controller must support future event animations without changing CharacterRenderer.
-
-9. Recommended Asset Direction
-
-Quaternius is currently the strongest candidate for the first prototype because its official Universal Base Characters page states CC0 licensing, commercial use, six game-ready humanoid bases, 20 hairstyles, optimized animation-friendly topology and humanoid rigging. The official Modular Character Outfits page states CC0, commercial use, 12 outfits and 62 modular parts. The official Universal Animation Library states CC0, commercial use and 120+ humanoid animations.
-
-These sources are suitable candidates, not a final art-direction decision. We still need to judge whether their visual style matches Hirotoli before replacing the current models.
-
-Sources checked: https://quaternius.itch.io/universal-base-characters ; https://quaternius.itch.io/modular-character-outfits-fantasy ; https://quaternius.itch.io/universal-animation-library
-
-10. Asset Governance
-
-Store source URL, creator, asset version/date and license for every third-party asset.
-
-Keep license/readme files in the repository where appropriate.
-
-Prefer GLB/glTF for browser runtime.
-
-Optimize and compress assets before production use.
-
-Do not treat 'free download' as sufficient licensing evidence.
-
-Do not mix assets with incompatible licenses into one supposedly free/commercial-safe pack.
-
-public/
-├── characters/
-│   ├── base/
-│   │   ├── character-01/
-│   │   └── character-02/
-│   ├── items/
-│   │   ├── hair/
-│   │   ├── outfits/
-│   │   ├── headwear/
-│   │   ├── eyewear/
-│   │   ├── footwear/
-│   │   └── accessories/
-│   ├── animations/
-│   └── licenses/
-
-11. Character Rendering Pipeline
-
-CharacterStage
-└── CharacterRenderer
-    ├── load CharacterDefinition
-    ├── load CharacterLoadout
-    ├── load base model
-    ├── attach equipment
-    ├── configure materials
-    ├── initialize animation controller
-    └── render
-
-The same renderer should later work on Home, character preview/reward screens and other approved 3D surfaces.
-
-12. Permanent Hirotoli Home World
-
-The default Home theme is a real 3D world/experience theme. It is not CSS. It is the visual identity of Home when no event is active.
-
-Home World
-├── Environment
-│   ├── Sky / background
-│   ├── Ground
-│   └── World geometry
-├── Lighting
-├── Atmosphere
-│   ├── Fog
-│   ├── Particles
-│   └── Ambient effects
-├── Decorations / Props
-├── Character Stage
-└── Camera
-
-The art direction must make Hirotoli recognizable and welcoming, with a game-like feel. Do not lock arbitrary colors before the visual direction is approved.
-
-13. Home World Theme Contract
-
-type HomeWorldTheme = {
-  id: string;
-  name: string;
-  version: number;
-  environment: {
-    background?: AssetRef;
-    sky?: AssetRef;
-    ground?: AssetRef;
-    environmentModel?: AssetRef;
-  };
-  lighting: {
-    ambient: LightConfig;
-    directional?: LightConfig;
-    pointLights?: LightConfig[];
-  };
-  atmosphere: {
-    fog?: FogConfig;
-    particles?: ParticleConfig[];
-    effects?: EffectConfig[];
-  };
-  decorations: AssetRef[];
-  audio?: { ambient?: AssetRef; music?: AssetRef };
-  characterStage: {
-    position: [number, number, number];
-    rotation: [number, number, number];
-    scale: number;
-  };
-  camera: { position: [number, number, number]; target: [number, number, number] };
-};
-
-14. Home Renderer
-
-<HomeWorld theme={activeHomeTheme}>
-  <HomeEnvironment theme={theme} />
-  <HomeLighting theme={theme} />
-  <HomeAtmosphere theme={theme} />
-  <HomeDecorations theme={theme} />
-  <CharacterStage>
-    <CharacterRenderer definition={character} loadout={loadout} />
-  </CharacterStage>
-</HomeWorld>
-
-Keep the normal Home greeting, CTAs and navigation as accessible HTML/UI outside the WebGL canvas where practical.
-
-15. Default Theme vs Event Theme
-
-The permanent Hirotoli world is the base layer. A future event adds a temporary layer.
-
-Default Hirotoli World
-        +
-Optional Event World Layer
+They are currently useful as compatibility/fallback assets, but they
+should NOT automatically be treated as the final Hirotoli art direction.
+
+The target is:
+
+Character 01 stable ID final Hirotoli base model final loadout future
+cosmetic compatibility
+
+Character 02 stable ID final Hirotoli base model final loadout future
+cosmetic compatibility
+
+The user’s selected character must be stored by stable character ID, not
+by gender.
+
+Gender can be a property of a character definition if required by the
+asset, but it must not be the permanent identity key.
+
+======================================================================
+5. FINAL CHARACTER ARCHITECTURE
+======================================================================
+
+Character | +– Definition | +– id | +– name | +– assetId | +– rigId | +–
+defaultLoadoutId | +– unlock information | +– Appearance | +– skin | +–
+hair | +– face/eyes where supported | +– Equipment | +– hair | +– outfit
+top | +– outfit bottom | +– full outfit | +– headwear | +– eyewear | +–
+facewear | +– footwear | +– accessories | +– Animation Controller | +–
+Renderer
+
+======================================================================
+6. CHARACTER DATA CONTRACT
+======================================================================
+
+Frontend/domain shape:
+
+type CharacterDefinition = { id: string; name: string; assetId: string;
+rigId: string; defaultLoadoutId: string; unlock: { type: “free” |
+“event_coins”; amount?: number; }; };
+
+type CharacterLoadout = { characterId: string; skinId?: string; hairId?:
+string; outfitTopId?: string; outfitBottomId?: string; fullOutfitId?:
+string; headwearId?: string; eyewearId?: string; facewearId?: string;
+footwearId?: string; accessoryIds: string[]; };
+
+Equipment item:
+
+type CharacterItem = { id: string; category: | “hair” | “outfit_top” |
+“outfit_bottom” | “full_outfit” | “headwear” | “eyewear” | “facewear” |
+“footwear” | “accessory”; assetId: string; rigId: string; attachment: |
+{ type: “skinned” } | { type: “bone”; boneName: string } | { type:
+“socket”; socketName: string }; compatibleCharacterIds: string[];
+source: { type: “base” | “event” | “system”; eventId?: string; }; };
+
+The renderer must receive already-validated character data.
+
+The renderer must never decide: - whether a user owns an item - whether
+an item was earned - whether an item is allowed - whether an event is
+active - whether Event Coins were spent
+
+======================================================================
+7. SERVER-SIDE CHARACTER SECURITY
+======================================================================
+
+The backend is authoritative.
+
+When PUT /characters/me or equivalent character update API is called:
+
+1.  Authenticate user.
+2.  Load requested character definition.
+3.  Confirm character exists.
+4.  Confirm user owns/unlocks the character.
+5.  Validate every item.
+6.  Confirm item exists.
+7.  Confirm user owns the item if ownership is required.
+8.  Confirm item is compatible with character.
+9.  Confirm item category is valid.
+10. Confirm mutually exclusive slots are not conflicting.
+11. Confirm full outfit is not combined with incompatible top/bottom
+    pieces.
+12. Confirm attachment metadata is valid.
+13. Save the validated loadout.
+14. Return canonical server state.
+
+The frontend must never be trusted for ownership or compatibility.
+
+======================================================================
+8. CHARACTER ASSET SOURCE
+======================================================================
+
+Recommended primary candidate: Quaternius Universal Base Characters.
+
+Official page: https://quaternius.itch.io/universal-base-characters
+
+The current official page describes: - 6 game-ready base models -
+male/female variants - optimized animation-friendly topology - Humanoid
+rig - 20 hairstyles - average approximately 13k tris - compatibility
+with Universal Animation Library - CC0 licensing - commercial use
+
+The official page was checked during preparation and currently lists the
+asset license as Creative Commons Zero v1.0 Universal.
+
+This is a strong production candidate, but it is still subject to a
+final art-direction and asset-integration review before being committed
+to the product.
+
+======================================================================
+9. CHARACTER OUTFIT SOURCE
+======================================================================
+
+Recommended primary candidate: Quaternius Modular Character Outfits -
+Fantasy.
+
+Official page:
+https://quaternius.itch.io/modular-character-outfits-fantasy
+
+The current official page describes: - 12 outfits - 62 modular parts - 3
+texture variations per outfit - compatibility with Universal Base
+Characters - Humanoid rig - compatibility with Universal Animation
+Library - CC0 licensing - commercial use
+
+The outfit pack can be used as a source for the initial wardrobe system,
+but only the assets selected for Hirotoli should be shipped.
+
+======================================================================
+10. CHARACTER ANIMATION SOURCE
+======================================================================
+
+Recommended future-compatible animation source: Quaternius Universal
+Animation Library.
+
+Official page: https://quaternius.itch.io/universal-animation-library
+
+The current official page describes: - 120+ humanoid animations -
+retargetable animations - locomotion - emotes - sitting - sprinting -
+crawling - other actions - CC0 licensing - commercial use
+
+Launch does NOT need to load all 120+ animations.
+
+Only the minimum required animation set should be integrated:
+
+Launch: - idle - greeting/wave - happy reaction - sad reaction -
+celebrate - interaction-ready
+
+Future: - walk - run - jump - sit - dance - emotes - event-specific
+animations
+
+The animation assets should remain independently loadable so Home does
+not download a huge animation library.
+
+======================================================================
+11. HOME WORLD ASSET SOURCE
+======================================================================
+
+Recommended environment foundation: Quaternius Medieval Village MegaKit.
+
+Official page: https://quaternius.itch.io/medieval-village-megakit
+
+The current official page describes: - 300+ modular environment pieces -
+walls - floors - stairs - roofs - modular construction - FBX/OBJ/glTF
+formats - CC0 licensing - commercial use
+
+IMPORTANT ART-DIRECTION RULE:
+
+Do NOT make Hirotoli look like a medieval RPG.
+
+The pack should be used as a visual construction kit for a: “cozy social
+village”
+
+Use: - small houses - village paths - gardens - wood structures -
+bridges - village square - fountain/stream - lanterns - greenery
+
+Avoid making the primary visual identity about: - castles - knights -
+weapons - dungeons - battles - war - dark RPG aesthetics
+
+======================================================================
+12. SUPPORTING ENVIRONMENT ASSETS
+======================================================================
+
+Fantasy Props MegaKit can provide additional village props.
+
+Official page: https://quaternius.itch.io/fantasy-props-megakit
+
+The current official page states CC0 and commercial use.
+
+Potential props: - benches - barrels - crates - signs - lamps - market
+props - decorative objects
+
+Stylized Nature MegaKit is a strong candidate for trees, rocks and
+vegetation.
+
+Official page: https://quaternius.itch.io/stylized-nature-megakit
+
+The current official page states CC0 and commercial use.
+
+Use only the subset needed for the Home scene.
+
+======================================================================
+13. ASSET LICENSE GOVERNANCE
+======================================================================
+
+Every third-party asset committed to the repository must have a record
+containing:
+
+asset name creator source URL download/version date license license URL
+if applicable asset version where used whether modified whether
+redistributed notes
+
+Example:
+
+assets/licenses/quaternius-character-assets.txt
+assets/licenses/quaternius-village-assets.txt
+
+Release gate: No third-party asset is production-approved merely because
+it is free to download.
+
+The license must be verified at the time the asset is actually
+committed/shipped.
+
+Do not mix assets with incompatible licenses into one supposedly
+unrestricted commercial pack.
+
+======================================================================
+14. PRODUCTION ASSET DIRECTORY
+======================================================================
+
+Recommended frontend structure:
+
+public/ | +– hirotoli/ | +– characters/ | | | +– base/ | | +–
+character-01/ | | +– character-02/ | | | +– items/ | | +– hair/ | | +–
+outfits/ | | +– headwear/ | | +– eyewear/ | | +– footwear/ | | +–
+accessories/ | | | +– animations/ | | | +– manifests/ | +– home/ | +–
+environment/ +– props/ +– nature/ +– audio/ +– event/ | +– manifests/ |
++– licenses/
+
+======================================================================
+15. CHARACTER RENDERING PIPELINE
+======================================================================
+
+CharacterStage | v CharacterRenderer | +– resolve CharacterDefinition |
++– validate/normalize loadout | +– load base GLB | +– clone
+scene/material state | +– load equipment | +– attach equipment | +–
+configure materials | +– initialize animation controller | +– render
+
+Important: Character instances must never share mutable material state.
+
+The existing character-material isolation approach should be retained
+and tested.
+
+======================================================================
+16. HOME WORLD ARCHITECTURE
+======================================================================
+
+The current Home world should become:
+
+HomeWorld | +– HomeEnvironment | +– HomeLighting | +– HomeAtmosphere |
++– HomeDecorations | +– HomeEventProps | +– CharacterStage | | | +–
+CharacterRenderer | +– CharacterRenderer | +– CharacterRenderer | +–
+CharacterRenderer | +– HomeSky | +– HomeAmbientAudio
+
+The existing HomeWorld, HomeThemeResolver and related boundaries should
+be reused.
+
+======================================================================
+17. HOME WORLD THEME CONTRACT
+======================================================================
+
+Target:
+
+type HomeWorldTheme = { id: string; name: string; version: number;
+
+environment: { background?: AssetRef; sky?: AssetRef; ground?: AssetRef;
+environmentModel?: AssetRef; };
+
+lighting: { ambient: LightConfig; directional?: LightConfig;
+pointLights?: LightConfig[]; };
+
+atmosphere: { fog?: FogConfig; particles?: ParticleConfig[]; effects?:
+EffectConfig[]; };
+
+decorations: AssetRef[];
+
+audio?: { ambient?: AssetRef; music?: AssetRef; };
+
+characterStage: { position: [number, number, number]; rotation: [number,
+number, number]; scale: number; };
+
+camera: { position: [number, number, number]; target: [number, number,
+number]; }; };
+
+======================================================================
+18. DEFAULT HIROTOLI WORLD
+======================================================================
+
+The launch world should be:
+
+id: hirotoli-village
+
+name: Hirotoli Village
+
+version: 1
+
+Visual composition:
+
+Background - soft sky - distant hills - warm daytime atmosphere
+
+Ground - stylized terrain - village paths - grass - small garden areas
+
+Architecture - 3–5 visually distinct small structures - wooden houses -
+roofs with controlled color variation - no repetitive copy/paste look
+
+Social focal area - central plaza - fountain or small stream - bridge or
+pathway - benches/meeting areas
+
+Nature - trees - bushes - flowers - rocks - controlled vegetation
+density
+
+Lighting - warm soft key light - ambient fill - subtle contact shading -
+no excessive bloom
+
+Atmosphere - subtle fog - optional low-cost particles - no heavy
+volumetric effects
+
+Character stage - clear focal area - sufficient empty space - no props
+intersecting the character - camera framing stable across supported
+character models
+
+======================================================================
+19. HOME WORLD THEME VS UI THEME
+======================================================================
+
+NEVER implement:
+
+UI dark mode -> dark Home world
+
+or:
+
+UI light mode -> light Home world
+
+Instead:
+
+UI theme: light/dark/system -> CSS/UI components
+
+Home world: hirotoli-village -> 3D renderer
+
+This is a hard architectural rule.
+
+======================================================================
+20. FUTURE EVENT THEME LAYER
+======================================================================
+
+The current backend already contains HomeWorldThemeLayer.
+
+Use the following conceptual model:
+
+Permanent Theme + 0..N active event layers -> Resolved HomeWorldTheme
+
+Event layer:
+
+type HomeThemeLayer = { id: string; priority: number;
+
+environment?: Partial<HomeWorldTheme[“environment”]>; lighting?:
+Partial<HomeWorldTheme[“lighting”]>; atmosphere?:
+Partial<HomeWorldTheme[“atmosphere”]>; decorations?: AssetRef[]; audio?:
+HomeWorldTheme[“audio”]; };
+
+The backend must determine: - active - start time - end time - priority
+
+The frontend consumes the resolved theme.
+
+The frontend must NOT decide whether an event is active based on its own
+clock alone.
+
+======================================================================
+21. HOME CHARACTER RENDERING
+======================================================================
+
+At launch:
+
+Owner: - own character
+
+Participant: - participant character
+
+Maximum visible characters: 4
+
+The character is static for launch.
+
+Allowed launch presentation: - idle animation - subtle breathing/idle
+movement if available - greeting/emote - character label - click/tap
+interaction
+
+Not allowed at launch: - movement controls - WASD - joystick -
+pathfinding - physics - jumping - running - character collision gameplay
+
+======================================================================
+22. CHARACTER IDENTITY CARD
+======================================================================
+
+Clicking/tapping a character should open an identity/action card.
+
+Actions:
+
+Self: - You - View Profile
+
+Owner: - Home Owner badge
+
+Other member: - View Profile - Add Connection - Connected - Request
+Sent - Accept Request
+
+The action must be determined from authoritative relationship state.
+
+Do not infer connection status from Home membership.
+
+======================================================================
+23. HOME CHAT INTEGRATION
+======================================================================
+
+Home Chat is a Home-membership feature.
+
+Rule:
+
+If user is an active member of Home: can read Home Chat can send Home
+Chat
+
+If user is not a member: cannot read Home Chat cannot send Home Chat
+
+Do NOT authorize Home Chat based on: - connection relationship - profile
+visibility - public feed access
+
+Desktop: - persistent right-side Home Chat panel
+
+Mobile: - drawer/bottom sheet
+
+Chat remains independent of the 3D renderer.
+
+======================================================================
+24. VOICE INTEGRATION
+======================================================================
+
+Voice is provided through LiveKit.
+
+Frontend already has: - home voice context - LiveKit provider -
+reconnect handling - voice hooks
+
+Backend already has: - Home voice service - LiveKit provider
+
+Architecture:
+
+Browser -> Home backend authorization -> LiveKit token -> LiveKit room
+-> WebRTC audio
+
+Socket.IO is NOT the audio transport.
+
+The backend must verify Home membership before issuing a voice token.
+
+The Home voice room should correspond to the Home domain identity
+internally.
+
+======================================================================
+25. HOME MEMBERSHIP RULES
+======================================================================
+
+Hard invariants:
+
+1.  One active Home membership per user.
+2.  Maximum 4 active Home members.
+3.  One owner.
+4.  Owner and participants are persistent membership records.
+5.  Presence is separate from membership.
+6.  Voice connection is separate from presence.
+7.  Offline member remains a member.
+8.  Temporary owner disconnect does not destroy Home.
+9.  Capacity is rechecked atomically at accept/join time.
+10. Server is authoritative.
+
+======================================================================
+26. IMPLEMENTATION PHASES
+======================================================================
+
+PHASE 0 — BASELINE AND FREEZE
+
+Goal: Create a safe starting point before changing assets or visuals.
+
+Tasks: 1. Create implementation branch. 2. Preserve current working Home
+behavior. 3. Run frontend: npm run typecheck npm run lint npm run test
+npm run build
+
+4.  Run backend: npm run typecheck npm run lint npm test npm run build
+
+5.  Run existing Home E2E/concurrency tests.
+
+6.  Record baseline performance.
+
+7.  Record current GLB sizes.
+
+8.  Record current Home loading time.
+
+9.  Record current frame rate on desktop and mobile test hardware.
+
+10. Freeze current API contracts.
+
+Deliverables: - clean baseline - baseline test report - baseline
+performance report
+
+Exit criteria: All existing tests/builds pass before visual migration
+begins.
+
+PHASE 1 — ASSET GOVERNANCE AND ART-DIRECTION APPROVAL
+
+Goal: Choose the exact assets before integrating them.
+
+Tasks: 1. Download candidate Quaternius Base Characters. 2. Download
+candidate Modular Character Outfits. 3. Download candidate village
+assets. 4. Download candidate props. 5. Download candidate nature
+assets. 6. Download required animation samples only. 7. Create asset
+manifest. 8. Create license records. 9. Compare character proportions.
+10. Compare character head/hair style. 11. Compare outfit quality. 12.
+Compare village style. 13. Test visual consistency between character and
+village. 14. Approve final art direction.
+
+Deliverables: - approved character 01 - approved character 02 - approved
+initial outfits - approved village asset subset - asset manifest -
+license manifest
+
+Exit criteria: No asset enters production code before art and license
+approval.
+
+PHASE 2 — CHARACTER ASSET MIGRATION
+
+Goal: Replace the current visual models without breaking the existing
+character architecture.
+
+Tasks: 1. Add final GLB files. 2. Add stable asset manifest. 3. Keep
+character IDs: character-01 character-02
+
+4.  Replace asset paths behind character-catalog.ts.
+5.  Verify rig IDs.
+6.  Verify model scale.
+7.  Verify origin/pivot.
+8.  Verify skeleton hierarchy.
+9.  Verify mesh names or metadata.
+10. Update material mapping.
+11. Remove dependency on hardcoded gender-based identity logic where
+    unnecessary.
+12. Keep legacy resolver fallback temporarily if required for existing
+    users.
+13. Add migration compatibility for old character config.
+
+Deliverables: - two final launch characters - compatible character
+renderer - backward-compatible user character state
+
+Exit criteria: Existing users do not lose character selection.
+
+PHASE 3 — CHARACTER EQUIPMENT SYSTEM
+
+Goal: Make clothing/accessories data-driven.
+
+Tasks: 1. Implement item manifest. 2. Implement equipment categories. 3.
+Implement attachment strategy. 4. Implement socket/bone mapping. 5.
+Implement compatibility matrix. 6. Implement material cloning. 7.
+Implement loadout resolver. 8. Implement server validation. 9. Implement
+ownership validation. 10. Implement full-outfit exclusivity. 11.
+Implement missing-item fallback. 12. Add unit tests.
+
+Deliverables: - data-driven loadout - validated equipment system -
+stable renderer API
+
+Exit criteria: Adding a new cosmetic does not require modifying Home
+components.
+
+PHASE 4 — CHARACTER ANIMATION CONTROLLER
+
+Goal: Introduce controlled animations without loading a huge animation
+library.
+
+Launch animations: - idle - wave - happy - sad - celebrate -
+interaction-ready
+
+Tasks: 1. Add animation manifest. 2. Load animations lazily. 3. Map
+logical animation names to asset clips. 4. Implement cross-fade. 5.
+Implement animation lifecycle. 6. Stop unnecessary animation when tab is
+hidden. 7. Respect prefers-reduced-motion. 8. Prevent multiple animation
+loops per character. 9. Add error fallback to idle. 10. Test 4
+simultaneous Home characters.
+
+Deliverables: - reusable animation controller
+
+Exit criteria: Four characters can render without unacceptable
+frame-rate degradation.
+
+PHASE 5 — HIROTOLI VILLAGE WORLD
+
+Goal: Replace the current procedural lobby with the actual Hirotoli
+world.
+
+Tasks: 1. Create environment manifest. 2. Create village layout. 3.
+Build main path. 4. Build central plaza. 5. Add houses. 6. Add greenery.
+7. Add bridge/stream/fountain. 8. Add props. 9. Add lighting. 10. Add
+sky. 11. Add atmosphere. 12. Add subtle ambient audio if approved. 13.
+Add character stage. 14. Add camera composition. 15. Remove/retire the
+old BGMI-style HomeLobbySet as the default world. 16. Keep the old
+implementation only if needed for rollback until release.
+
+Deliverables: - Hirotoli Village v1
+
+Exit criteria: The Home visually reads as a coherent social village
+rather than a technical demo/lobby.
+
+PHASE 6 — THEME RESOLUTION
+
+Goal: Make the world completely data-driven.
+
+Tasks: 1. Define hirotoli-village default theme. 2. Define version. 3.
+Define environment references. 4. Define lighting configuration. 5.
+Define atmosphere. 6. Define decorations. 7. Define audio. 8. Define
+character stage. 9. Define camera. 10. Use HomeThemeResolver. 11. Merge
+active server event layers. 12. Add deterministic priority handling. 13.
+Add tests for no event. 14. Add tests for one event. 15. Add tests for
+overlapping priorities. 16. Add tests for expired events.
+
+Deliverables: - server-authoritative theme resolution - deterministic
+frontend rendering
+
+Exit criteria: A future event can add a layer without rewriting
+HomeWorld.
+
+PHASE 7 — HOME CHARACTER + WORLD INTEGRATION
+
+Goal: Connect user character state to Home.
+
+Tasks: 1. Load current user’s canonical character. 2. Load canonical
+loadout. 3. Render own character. 4. Render other Home members. 5.
+Resolve missing/invalid character state to default. 6. Add character
+labels. 7. Add click/tap interaction. 8. Add identity card. 9. Add Home
+Owner badge. 10. Preserve Home chat. 11. Preserve Home voice. 12.
+Preserve invitations. 13. Preserve join requests.
+
+Deliverables: - complete Home experience
+
+Exit criteria: Owner and participants see the correct characters and
+social actions.
+
+PHASE 8 — PERFORMANCE AND WEBGL HARDENING
+
+Goal: Make the experience production-safe on realistic devices.
+
+Tasks: 1. Compress GLBs where compatible. 2. Compress textures. 3.
+Remove unused assets. 4. Lazy-load nonessential props. 5. Lazy-load
+animation clips. 6. Limit draw calls. 7. Limit dynamic lights. 8. Limit
+particles. 9. Avoid expensive post-processing. 10. Dispose resources
+correctly. 11. Avoid duplicate GLTF loading. 12. Cache immutable assets.
+13. Pause effects when tab is hidden. 14. Respect reduced motion. 15.
+Implement WebGL fallback. 16. Implement loading state. 17. Implement
+model-load error state. 18. Test 4-character Home.
+
+Measure: - initial JS size - initial 3D asset transfer - GLB transfer -
+texture memory - draw calls - triangles - FPS - time to first usable
+Home - memory after 10 minutes - memory after leaving/re-entering Home
+
+Exit criteria: No obvious frame drops or runaway memory during normal
+Home use.
+
+PHASE 9 — SECURITY AND PRODUCTION HARDENING
+
+Goal: Ensure the visual system cannot bypass backend authorization.
+
+Tasks: 1. Character ownership validated server-side. 2. Cosmetic
+ownership validated server-side. 3. Home membership validated
+server-side. 4. Home Chat membership validated server-side. 5. LiveKit
+token membership validated server-side. 6. Event theme timing controlled
+server-side. 7. Event rewards granted server-side. 8. Event Coins
+validated server-side. 9. No database access from frontend. 10. No
+Prisma/database access from CharacterRenderer. 11. No secrets in
+frontend. 12. Validate asset IDs against allowlisted manifests. 13.
+Reject malformed loadouts. 14. Audit sensitive character/economy
+changes.
+
+Exit criteria: A malicious client cannot unlock a character/cosmetic or
+access another Home’s voice/chat by modifying frontend state.
+
+PHASE 10 — TESTING
+
+Frontend unit tests: - character catalog - character fallback - loadout
+normalization - equipment compatibility - material isolation - animation
+fallback - theme resolver - event layer merge - camera layout - WebGL
+fallback
+
+Backend unit tests: - character ownership - character item ownership -
+loadout validation - Home membership - Home capacity - invitation
+lifecycle - join-request lifecycle - Home policy - theme resolution -
+event timing - LiveKit authorization
+
+Integration tests: - select character -> persist -> reload - equip item
+-> persist -> reload - enter Home -> character visible - second user
+joins -> second character visible - fourth user joins -> visible - fifth
+user rejected - owner leaves temporarily -> Home remains - member
+reconnects -> presence restored - voice token rejected for non-member -
+Home Chat rejected for non-member
+
+E2E: - desktop Home - mobile Home - light UI + Home - dark UI + Home -
+slow network - failed asset - WebGL unavailable - reduced motion -
+browser tab hidden/returned
+
+PHASE 11 — UAT AND ROLLOUT
+
+Goal: Release safely.
+
+Environment: Development -> UAT -> Production
+
+Before UAT: 1. Production build. 2. Database migration review. 3. Asset
+license review. 4. Asset checksum/version record. 5. Environment
+variable review. 6. LiveKit environment review. 7. Error tracking
+review. 8. Performance review. 9. Mobile browser review.
+
+UAT scenarios: 1. New user opens Home. 2. User selects character. 3.
+User reloads. 4. Character remains. 5. User invites another user. 6.
+User accepts. 7. Both characters appear. 8. Home Chat works. 9. Voice
+works. 10. User disconnects. 11. User reconnects. 12. UI light/dark
+changes. 13. 3D world remains Hirotoli Village. 14. Fourth member joins.
+15. Fifth member is rejected.
+
+Rollout: - internal test users - small production cohort - monitor -
+expand gradually
+
+Rollback: Keep the old Home world asset path available behind a
+controlled rollback configuration until the new world has passed
+production validation.
+
+======================================================================
+27. DATABASE / MIGRATION RULES
+======================================================================
+
+The latest Prisma schema already contains the important character and
+Home structures.
+
+Character: - Character - CharacterItem - UserCharacter -
+UserCharacterItem
+
+Home: - Home - HomeMembership - HomeInvitation - HomeJoinRequest
+
+Theme: - HomeWorldThemeLayer
+
+Migration rules: 1. Never remove old character fields before migration
+compatibility is verified. 2. Backfill existing users to
+character-01/character-02. 3. Preserve existing character preference
+where possible. 4. Never silently grant paid/future characters. 5. Use
+stable IDs. 6. Make migrations reversible where practical. 7. Test
+migrations against a copy of UAT data. 8. Do not rely on frontend
+migrations for authorization.
+
+======================================================================
+28. BACKWARD COMPATIBILITY
+======================================================================
+
+Current legacy shape may contain:
+
+gender skinColor hairColor outfitColor
+
+The new system must temporarily support normalization:
+
+Legacy CharacterConfig | v resolveCharacter() | v CharacterDefinition +
+CharacterLoadout
+
+Unknown legacy values must safely fall back to the default launch
+character.
+
+After all users are migrated and verified, legacy fields can be
+deprecated and eventually removed.
+
+======================================================================
+29. PERFORMANCE TARGETS
+======================================================================
+
+These are engineering targets, not fabricated measurements of the
+current repository.
+
+Desktop target: - smooth 60 FPS on representative modern hardware -
+stable rendering with 4 characters - no continuous frame-time spikes
+during idle Home
+
+Mobile target: - stable 30+ FPS on representative mid-range devices -
+adaptive effects - reduced particle density - reduced lighting
+complexity - no unnecessary animation when hidden
+
+Loading: - show useful UI immediately - show explicit 3D loading state -
+progressively load nonessential assets
+
+Memory: - no continuous growth after entering/leaving Home repeatedly -
+dispose resources on Home unmount - avoid duplicate GLTF/material copies
+
+======================================================================
+30. OBSERVABILITY
+======================================================================
+
+Track technical events:
+
+home_3d_load_started home_3d_load_completed home_3d_load_failed
+character_load_started character_load_completed character_load_failed
+character_asset_fallback home_theme_resolved home_theme_layer_applied
+home_voice_token_failed
+
+Do NOT log: - LiveKit API secrets - authentication tokens - sensitive
+user data - raw private chat content
+
+Recommended metadata: - asset ID - theme ID - browser family - device
+class where safely available - failure code - load duration - Home
+member count
+
+Performance telemetry must be privacy-conscious.
+
+======================================================================
+31. ERROR HANDLING
+======================================================================
+
+Character asset failure: -> show default safe character or controlled
+fallback
+
+Unknown character ID: -> character-01
+
+Unknown cosmetic: -> ignore invalid item and use valid default loadout
+
+Invalid loadout: -> server rejects -> frontend displays controlled
+validation error
+
+Home theme unavailable: -> default Hirotoli Village
+
+Event layer unavailable: -> ignore event layer -> default world remains
+usable
+
+WebGL unavailable: -> accessible non-WebGL Home fallback
+
+LiveKit unavailable: -> Home remains usable -> show “Voice isn’t
+available”
+
+Important: 3D/voice must never become a dependency for the core social
+application.
+
+======================================================================
+32. ACCESSIBILITY
+======================================================================
+
+3D is enhancement, not the only way to understand Home.
+
+Keep important information in normal HTML/UI: - Home name - owner -
+members - member status - chat - voice state - invitations - actions
+
+Support: - keyboard navigation - focus states - reduced motion -
+screen-reader labels - WebGL fallback - loading announcements - error
+announcements
+
+Do not hide essential actions inside the 3D canvas.
+
+======================================================================
+33. SECURITY MODEL
+======================================================================
+
+Never trust: - character ID from client - cosmetic ID from client - Home
+membership from client - Home capacity from client - event status from
+client - Event Coin balance from client - voice authorization from
+client
+
+Trust: - authenticated backend user - backend database - backend
+policy - server-authoritative event timing - server-authoritative
+ownership
+
+======================================================================
+34. PRODUCTION FILE / CODE BOUNDARIES
+======================================================================
+
+Frontend:
+
+src/components/character/ CharacterRenderer.tsx CharacterStage.tsx
+CharacterEquipment.tsx CharacterAnimationController.ts
+character-catalog.ts character-types.ts character-materials.ts
+character-assets.ts character-equipment-slots.ts use-character-clip.ts
+
+src/components/home/ HomeWorld.tsx HomeEnvironment.tsx HomeLighting.tsx
+HomeAtmosphere.tsx HomeDecorations.tsx HomeEventProps.tsx HomeSky.tsx
+HomeAmbientAudio.tsx HomeThemeResolver.ts home-default-theme.ts
+home-world-types.ts HomePerfProbe.tsx
+
+Backend:
+
+src/modules/characters/ character-catalog.ts character-types.ts
+characters.service.ts characters.controller.ts dto/
+
+src/modules/home/ home.service.ts home-membership.service.ts
+home-policy.service.ts home-presence.service.ts
+home-invitation.service.ts home-join-request.service.ts world/ voice/
+
+Keep domain logic in services/policies. Do not move business rules into
+React components.
+
+======================================================================
+35. FUTURE EVENT ARCHITECTURE
+======================================================================
+
+After launch:
+
+Permanent Hirotoli Village | +—- Event 01 Layer | +—- Event 02 Layer |
++—- Event 03 Layer
+
+The event system may provide:
+
+Temporary: - world atmosphere - decorations - lighting - event props -
+interactions
+
+Permanent rewards: - character cosmetics - badges - Event Coins - future
+characters
+
+Core renderer remains unchanged.
+
+======================================================================
+36. FUTURE CHARACTER EXPANSION
+======================================================================
+
+Launch: character-01 character-02
+
+Future: character-03 character-04 …
+
+Unlock mechanism may eventually use Event Coins.
+
+Flow:
+
+Event reward -> Event Coins -> server balance validation -> character
+ownership -> character becomes selectable
+
+CharacterRenderer must not know about Event Coins.
+
+======================================================================
+37. NON-GOALS / SCOPE CONTROL
+======================================================================
+
+Do not expand this implementation into:
+
+-   MMO systems
+-   game physics
+-   combat
+-   inventory economy
+-   player housing editor
+-   procedural world generator
+-   multiplayer movement
+-   large NPC simulation
+-   full avatar creator
+-   character marketplace
+-   battle pass
+-   gacha
+-   complex event engine
+
+Those are separate future projects.
+
+The launch implementation should make Home feel polished, social and
+alive without becoming a game-development project.
+
+======================================================================
+38. FINAL IMPLEMENTATION ORDER
+======================================================================
+
+The recommended execution order is:
+
+PHASE 0 Baseline + freeze
+
         ↓
-Active Home Experience
 
-An event can override/add sky, lighting, particles, decorations, effects, audio and event objects. When it ends, only the event layer disappears. The default Home returns automatically.
+PHASE 1 Asset + license + art-direction approval
 
-16. Theme Composition
-
-type HomeThemeLayer = {
-  id: string;
-  priority: number;
-  environment?: Partial<HomeWorldTheme["environment"]>;
-  lighting?: Partial<HomeWorldTheme["lighting"]>;
-  atmosphere?: Partial<HomeWorldTheme["atmosphere"]>;
-  decorations?: AssetRef[];
-  audio?: HomeWorldTheme["audio"];
-};
-
-The resolver produces one final renderable HomeWorldTheme from the default world plus zero or more active layers. Event timing is server-authoritative.
-
-17. Integration With Current Home
-
-Keep the existing Home greeting and meaningful CTAs.
-
-Keep public-room/Toli entry cards below the hero.
-
-Keep the character as a personal Home experience, not the public social avatar.
-
-Keep WebGL fallback, loading state and reduced-motion behavior.
-
-Do not let 3D decoration obscure navigation or text.
-
-On mobile, preserve the blueprint's 260–340px character-stage target and accessible stacked actions.
-
-18. Performance
-
-Load only the selected character and equipped items initially.
-
-Lazy-load nonessential decorations and event assets.
-
-Use optimized GLB/glTF and compressed textures where supported.
-
-Measure draw calls, texture memory, polygon count and frame rate.
-
-Reduce expensive effects on mobile.
-
-Pause/limit unnecessary animation/effects when the tab is hidden.
-
-Respect prefers-reduced-motion.
-
-Test on representative mid-range mobile hardware.
-
-19. Ownership / Event Coins
-
-CharacterDefinition
-├── Character 01 — free
-├── Character 02 — free
-└── Character 03+ — future event-coins unlocks
-
-Event Coins
-   ↓
-Server validates balance
-   ↓
-Character ownership record
-   ↓
-Character becomes selectable
-
-Event Coins belong to the economy/event layer. The character renderer only consumes an already-authorized character/loadout.
-
-20. Persistent Event Cosmetics
-
-Event cosmetics should become normal owned CharacterItems. Ending an event removes temporary world content but does not remove owned cosmetics.
-
-Event
-├── temporary Home world layer
-├── temporary interactions
-└── permanent rewards
         ↓
-   CharacterItem
+
+PHASE 2 Final character asset migration
+
         ↓
-     Inventory
 
-21. Backend Responsibilities
+PHASE 3 Equipment/loadout system
 
-Persist the user's selected character/loadout.
+        ↓
 
-Validate character and cosmetic ownership server-side.
+PHASE 4 Animation controller
 
-Validate compatibility before saving a loadout.
+        ↓
 
-Expose active event/theme metadata from a server-authoritative source.
+PHASE 5 Hirotoli Village world
 
-Grant Event Coins/rewards server-side.
+        ↓
 
-Keep Home world themes separate from global UI theme preferences.
+PHASE 6 Theme resolver + event layers
 
-22. Suggested Frontend Structure
+        ↓
 
-src/
-├── components/
-│   ├── character/
-│   │   ├── CharacterRenderer.tsx
-│   │   ├── CharacterStage.tsx
-│   │   ├── CharacterEquipment.ts
-│   │   ├── CharacterAnimationController.ts
-│   │   └── character-types.ts
-│   └── home/
-│       ├── HomeWorld.tsx
-│       ├── HomeEnvironment.tsx
-│       ├── HomeLighting.tsx
-│       ├── HomeAtmosphere.tsx
-│       ├── HomeDecorations.tsx
-│       ├── HomeThemeResolver.ts
-│       └── home-world-types.ts
-└── pages/
-    └── home-page.tsx
+PHASE 7 Home character/social integration
 
-These are proposed boundaries. Reuse existing project conventions and components where they already satisfy the contract.
+        ↓
 
-23. Migration Plan
+PHASE 8 Performance + WebGL hardening
 
-Audit current Home/character code and freeze existing API/UI contracts.
+        ↓
 
-Select and verify the final character asset family.
+PHASE 9 Security hardening
 
-Introduce CharacterDefinition and CharacterLoadout without changing Home layout.
+        ↓
 
-Put the existing models behind the new renderer abstraction.
+PHASE 10 Testing
 
-Implement equipment slots and attachment points.
+        ↓
 
-Ship exactly two final launch characters.
+PHASE 11 UAT + rollout
 
-Add the initial animation controller.
+======================================================================
+39. PRODUCTION DEFINITION OF DONE
+======================================================================
 
-Refactor the current 3D Home into HomeWorld layers.
+Character: [ ] Exactly two launch characters are selectable. [ ] Both
+are free. [ ] Stable IDs are used. [ ] Character selection persists. [ ]
+Existing users are migrated safely. [ ] Loadout validation is
+server-side. [ ] Equipment is data-driven. [ ] Character materials are
+isolated. [ ] Initial animations work. [ ] Reduced motion works. [ ]
+Missing assets fail safely.
 
-Create and polish the permanent Hirotoli default world.
+World: [ ] Hirotoli Village is the default Home world. [ ] World is
+separate from UI light/dark mode. [ ] Environment is theme-driven. [ ]
+Lighting is theme-driven. [ ] Atmosphere is theme-driven. [ ]
+Decorations are theme-driven. [ ] Character stage is theme-driven. [ ]
+Camera is stable. [ ] Event layer can be added without rewriting
+HomeWorld.
 
-Optimize loading/performance and accessibility.
+Home: [ ] Own character renders. [ ] Other Home members render. [ ]
+Maximum four members is enforced. [ ] Character identity card works. [ ]
+Owner identity is visible. [ ] Home Chat authorization is
+membership-based. [ ] Home Voice authorization is membership-based. [ ]
+Voice uses LiveKit/WebRTC. [ ] WebSocket is not used for audio.
 
-Run desktop/mobile QA.
+Performance: [ ] Assets are optimized. [ ] Nonessential assets
+lazy-load. [ ] No obvious memory leak. [ ] Mobile effects are adaptive.
+[ ] WebGL fallback works. [ ] Loading state works. [ ] Error state
+works. [ ] Four-character Home is tested.
 
-Only after the default Home is stable, connect the event-theme extension point.
+Security: [ ] Character ownership is server-authoritative. [ ] Cosmetic
+ownership is server-authoritative. [ ] Event status is
+server-authoritative. [ ] Home membership is server-authoritative. [ ]
+Voice token issuance is server-authoritative. [ ] No frontend secret
+exposure. [ ] No direct DB access from renderer.
 
-24. Event-Readiness Test
+Licensing: [ ] Every external asset has a source record. [ ] Every
+external asset has a license record. [ ] License was verified at release
+time. [ ] Repository license records exist. [ ] No incompatible asset
+licenses are mixed unintentionally.
 
-The architecture passes the test if a future event can add a world layer, event props/effects and character cosmetics without modifying the core CharacterRenderer or duplicating HomeWorld.
+QA: [ ] Unit tests pass. [ ] Integration tests pass. [ ] E2E tests pass.
+[ ] Desktop tested. [ ] Mobile tested. [ ] Slow network tested. [ ]
+WebGL failure tested. [ ] Reduced motion tested. [ ] Reconnect tested.
 
-Event 01
-├── theme layer
-├── props/effects
-├── cosmetics
-└── rewards
+======================================================================
+40. FINAL ARCHITECTURE
+======================================================================
 
-Core remains:
-CharacterRenderer
-HomeWorld
-ThemeResolver
-Inventory
-EventResolver
+                         HIROTOLI
+                            |
+          +-----------------+------------------+
+          |                                    |
+      APPLICATION                         HOME EXPERIENCE
+       UI THEME                                |
+          |                                    |
 
-25. Explicit Non-Goals
+light/dark/system HomeWorld + accent | | +—————–+——————+ | | | | | | |
+Environment Lighting Atmosphere Props Audio | | | Theme Resolver | | |
++—————–+——+ | | | | Permanent World Event Layers | | | | +———–+————+ | |
+| Resolved World | | +————————————————————+ | Character System |
++————————-+————————+ | | | Definition Loadout Animation | | |
++————————-+————————+ | CharacterRenderer | +————–+————–+ | | | Own
+Character Member 2 Member 3/4
 
-No large launch character catalog.
+======================================================================
+41. IMPORTANT IMPLEMENTATION PRINCIPLE
+======================================================================
 
-No paid character shop.
+The final system must follow this rule:
 
-No battle pass, gacha or complex cosmetic economy.
+THE 3D WORLD IS A PRESENTATION LAYER. THE CHARACTER SYSTEM IS A
+DOMAIN-BACKED PRESENTATION LAYER. THE BACKEND IS THE AUTHORITY. THE
+GLOBAL UI THEME IS SEPARATE. THE EVENT SYSTEM IS AN EXTENSION LAYER.
 
-No replacement of the global light/dark/accent system.
+Therefore:
 
-No multiple Home worlds at launch.
+React must not own authorization. Three.js must not own business rules.
+CharacterRenderer must not own inventory rules. HomeWorld must not own
+event scheduling. LiveKit must not define Home membership. CSS theme
+must not define Home world theme.
 
-No full user-generated 3D avatar editor.
+This separation is what keeps the implementation production-ready.
 
-No huge animation library loaded into Home.
+======================================================================
+42. IMMEDIATE NEXT ACTION
+======================================================================
 
-No full event system in this implementation.
+Do not implement everything in one pass.
 
-26. Definition of Done
+Start with PHASE 0.
 
-Exactly two selectable free characters work end-to-end.
+After Phase 0 passes: 1. Review the exact candidate character assets. 2.
+Review the exact village assets. 3. Approve the visual direction. 4.
+Then begin PHASE 1.
 
-Character selection persists correctly.
+Do not replace the existing GLBs or Home world until the asset selection
+is approved.
 
-Supported equipment slots render correctly.
+The current architecture should be preserved while the visual layer is
+replaced.
 
-Initial animation set works and respects reduced motion.
+======================================================================
+APPENDIX — OFFICIAL ASSET SOURCES
+======================================================================
 
-Existing Home behavior remains intact.
+Quaternius Universal Base Characters
+https://quaternius.itch.io/universal-base-characters
 
-Default Hirotoli Home world is coherent and visually distinct.
+Quaternius Modular Character Outfits - Fantasy
+https://quaternius.itch.io/modular-character-outfits-fantasy
 
-Home world values are driven through a theme definition.
+Quaternius Universal Animation Library
+https://quaternius.itch.io/universal-animation-library
 
-WebGL fallback/loading/error states work.
+Quaternius Medieval Village MegaKit
+https://quaternius.itch.io/medieval-village-megakit
 
-Desktop and mobile Home are tested.
+Quaternius Fantasy Props MegaKit
+https://quaternius.itch.io/fantasy-props-megakit
 
-Performance is measured on representative hardware.
+Quaternius Stylized Nature MegaKit
+https://quaternius.itch.io/stylized-nature-megakit
 
-Third-party assets have verified licensing records.
-
-Adding a future event does not require rewriting CharacterRenderer/HomeWorld.
-
-27. Final Product Model
-
-HIROTOLI
-│
-├── Global UI Preferences
-│   └── light/dark/system + accent
-│
-├── Permanent Home World
-│   └── Hirotoli Default Theme
-│
-├── Character System
-│   ├── Character 01 — Free
-│   ├── Character 02 — Free
-│   ├── Equipment
-│   └── Animations
-│
-└── Future Event Layer
-    ├── Temporary Home theme changes
-    ├── Event decorations/effects
-    ├── Event cosmetics
-    ├── Event Coins
-    └── Future character unlocks
-
-The immediate goal is intentionally simple: make Home feel like a real Hirotoli world and give users two polished, reusable 3D characters. The architecture is production-ready for future expansion without implementing that future expansion prematurely.
-
-28. Research Notes
-
-Current official Quaternius sources checked during preparation:
-
-Universal Base Characters — https://quaternius.itch.io/universal-base-characters
-
-Modular Character Outfits — https://quaternius.itch.io/modular-character-outfits-fantasy
-
-Universal Animation Library — https://quaternius.itch.io/universal-animation-library
-
-The official pages currently state CC0 and commercial use for these packs. License records should be rechecked at the time each asset is actually committed/shipped.
+These URLs are source references, not permission to skip the
+release-time license verification step.

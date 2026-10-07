@@ -34,6 +34,10 @@ export const CHARACTER_MAP = new Map(
 
 // Base items only. Event cosmetics arrive later as source: 'event' entries
 // with the same shape — no renderer change required.
+// NOTE: assetId values are compatibility fallbacks (/character-scene/*.glb,
+// procedural/color refs). Final Quaternius GLBs live under
+// /hirotoli/characters/... after Phase 1 art approval (see
+// assets/licenses/*). Stable IDs (character-01/character-02) never change.
 export const CHARACTER_ITEMS: CharacterItem[] = [
   {
     id: 'skin-base-01',
@@ -66,6 +70,33 @@ export const CHARACTER_ITEMS: CharacterItem[] = [
     id: 'outfit-bottom-base-01',
     category: 'outfit_bottom',
     assetId: 'color-outfit-bottom-base',
+    rigId: RIG_ID,
+    attachment: { type: 'skinned' },
+    compatibleCharacterIds: ['character-01', 'character-02'],
+    source: { type: 'base' },
+  },
+  {
+    id: 'headwear-base-cap-01',
+    category: 'headwear',
+    assetId: 'procedural-cap-01',
+    rigId: RIG_ID,
+    attachment: { type: 'socket', socketName: 'headTop' },
+    compatibleCharacterIds: ['character-01', 'character-02'],
+    source: { type: 'base' },
+  },
+  {
+    id: 'eyewear-base-glasses-01',
+    category: 'eyewear',
+    assetId: 'procedural-glasses-01',
+    rigId: RIG_ID,
+    attachment: { type: 'socket', socketName: 'faceFront' },
+    compatibleCharacterIds: ['character-01', 'character-02'],
+    source: { type: 'base' },
+  },
+  {
+    id: 'full-outfit-base-01',
+    category: 'full_outfit',
+    assetId: 'color-full-outfit-base',
     rigId: RIG_ID,
     attachment: { type: 'skinned' },
     compatibleCharacterIds: ['character-01', 'character-02'],

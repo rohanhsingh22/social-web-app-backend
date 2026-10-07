@@ -214,6 +214,16 @@ async function main() {
       sourceType: 'base',
       eventId: null as string | null,
     },
+    {
+      id: 'full-outfit-base-01',
+      category: 'full_outfit',
+      assetId: 'color-full-outfit-base',
+      rigId: 'humanoid-v1',
+      attachment: { type: 'skinned' },
+      compatibleCharacterIds: ['character-01', 'character-02'],
+      sourceType: 'base',
+      eventId: null as string | null,
+    },
   ];
   for (const item of items) {
     await prisma.characterItem.upsert({

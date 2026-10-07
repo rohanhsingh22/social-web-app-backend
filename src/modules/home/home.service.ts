@@ -114,7 +114,7 @@ export class HomeService {
 
     const home = membership.home;
     const memberIds = home.memberships.map((m) => m.userId);
-    const [users, presence] = await Promise.all([
+    const [users, presence, viewerConnections] = await Promise.all([
       this.prisma.user.findMany({
         where: { id: { in: memberIds } },
         select: {
@@ -126,7 +126,35 @@ export class HomeService {
         },
       }),
       this.homePresence.presenceMap(memberIds),
+      // Identity card actions (spec §22) need authoritative relationship
+      // state — never infer connection status from Home membership.
+      this.prisma.connection.findMany({
+        where: {
+          OR: [
+            { requesterId: userId },
+            { receiverId: userId },
+          ],
+        },
+        select: { requesterId: true, receiverId: true, status: true },
+      }),
     ]);
+
+    const connectionByUser = new Map(
+      viewerConnections.map((c) => {
+        const other =
+          c.requesterId === userId ? c.receiverId : c.requesterId;
+        let state = 'none';
+        if (c.status === ConnectionStatus.accepted) {
+          state = 'connected';
+        } else if (c.status === ConnectionStatus.pending) {
+          state =
+            c.requesterId === userId ? 'request_sent' : 'request_received';
+        } else if (c.status === ConnectionStatus.blocked) {
+          state = 'blocked';
+        }
+        return [other, state] as const;
+      }),
+    );
 
     const byId = new Map(users.map((u) => [u.id, u]));
     return {
@@ -141,6 +169,12 @@ export class HomeService {
           publicUserId: byId.get(m.userId)?.publicUserId ?? null,
           displayName: byId.get(m.userId)?.profile?.displayName ?? 'Someone',
           role: m.role,
+          isOwner: m.userId === home.ownerId,
+          isSelf: m.userId === userId,
+          connectionStatus:
+            m.userId === userId
+              ? 'self'
+              : (connectionByUser.get(m.userId) ?? 'none'),
           presence: presence.get(m.userId) ?? 'offline',
           // Legacy field kept for backward compat — frontend prefers
           // `character` when present.
@@ -169,7 +203,7 @@ export class HomeService {
         status: ConnectionStatus.accepted,
         OR: [{ requesterId: viewerId }, { receiverId: viewerId }],
       },
-      select: { requesterId: true, receiverId: true },
+      select: { requesterId: true, receiverId: true, status: true },
     });
     const targetIds = [
       ...new Set(
@@ -234,6 +268,8 @@ export class HomeService {
         character: this.toResolvedCharacter(rawConfig),
         presence: presence.get(targetId) ?? 'offline',
         homeState,
+        // Authoritative relationship state for the identity card (spec §22).
+        connectionStatus: 'connected',
         homeMemberCount:
           homeState === 'OTHER_HOME' && targetHomeId
             ? (countByHome.get(targetHomeId) ?? 0)
@@ -316,7 +352,9 @@ export class HomeService {
       if (!characterId) {
         return null;
       }
-      const resolved = this.characters.resolveCharacter(characterId, loadout);
+      // Lenient read path (spec §31): unknown cosmetics drop item-by-item
+      // while valid items survive. Never throws for bad items.
+      const resolved = this.characters.resolveLenient(characterId, loadout);
       return {
         definitionId: resolved.definition.id,
         loadout: resolved.loadout as unknown as Record<string, unknown>,

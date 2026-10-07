@@ -53,6 +53,12 @@ describe('HomeService', () => {
           loadout: { characterId, accessoryIds: [], ...(loadout ?? {}) },
         }),
       ),
+      resolveLenient: jest.fn(
+        (characterId: string, loadout?: Record<string, unknown>) => ({
+          definition: { id: characterId },
+          loadout: { characterId, accessoryIds: [], ...(loadout ?? {}) },
+        }),
+      ),
     } as unknown as CharactersService;
 
     return {
@@ -251,6 +257,7 @@ describe('HomeService', () => {
         ['user-2', 'offline'],
       ]),
     );
+    (prisma.connection.findMany as jest.Mock).mockResolvedValue([]);
 
     const state = await service.getHomeState('owner-1');
 
@@ -264,6 +271,9 @@ describe('HomeService', () => {
           publicUserId: 'HT-OWNER001',
           displayName: 'Owner',
           role: HomeMemberRole.OWNER,
+          isOwner: true,
+          isSelf: true,
+          connectionStatus: 'self',
           presence: 'online',
           characterConfig: { gender: 'female' },
           character: null,
@@ -274,6 +284,9 @@ describe('HomeService', () => {
           publicUserId: 'HT-USER0002',
           displayName: 'Guest',
           role: HomeMemberRole.PARTICIPANT,
+          isOwner: false,
+          isSelf: false,
+          connectionStatus: 'none',
           presence: 'offline',
           characterConfig: { gender: 'male' },
           character: null,

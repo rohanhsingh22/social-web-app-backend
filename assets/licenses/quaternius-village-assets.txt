@@ -1,0 +1,14 @@
+Hirotoli asset license record (spec §13)
+========================================
+
+asset name: Quaternius Medieval Village MegaKit (candidate, cozy-social subset)
+creator: Quaternius
+source URL: https://quaternius.itch.io/medieval-village-megakit
+download/version date: 2026-10-07 (candidate review; NOT yet shipped)
+license: Creative Commons Zero v1.0 Universal (CC0) — as listed on source page at review time
+license URL: https://creativecommons.org/publicdomain/zero/1.0/
+asset version: latest available at review time (to be pinned at art-approval)
+where used: future /hirotoli/home/environment/* (village paths, 3-5 small houses, plaza, fountain/stream, bridge, benches, lanterns; pending Phase 1 approval)
+whether modified: no (evaluation only)
+whether redistributed: no (not committed)
+notes: Candidate per spec §11 (300+ modular pieces, FBX/OBJ/glTF). ART-DIRECTION RULE: do NOT make Hirotoli look like a medieval RPG. Use as cozy social village kit only. Avoid castles/knights/weapons/dungeons/battles. Backend default theme (home-default-theme.ts) is data-driven so the world can be composed without rewriting HomeWorld.

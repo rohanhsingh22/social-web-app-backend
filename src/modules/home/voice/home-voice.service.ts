@@ -46,11 +46,16 @@ export class HomeVoiceService {
       where: { userId },
     });
     if (!membership) {
+      // Observability (spec §30): home_voice_token_failed without PII/secrets.
+      this.logger.warn(`home.voice.token.failed reason=NOT_HOME_MEMBER`);
       throw new ForbiddenException('NOT_HOME_MEMBER');
     }
 
     const serverUrl = this.config.get<string>('voice.livekitUrl');
     if (!serverUrl) {
+      this.logger.warn(
+        `home.voice.token.failed home=${membership.homeId} reason=VOICE_UNAVAILABLE`,
+      );
       throw new ServiceUnavailableException('VOICE_UNAVAILABLE');
     }
 

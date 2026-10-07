@@ -1,5 +1,6 @@
 import { PrismaService } from '@app/core/prisma/prisma.service';
 import { FanoutService } from '@app/realtime/fanout/fanout.service';
+import { CharactersService } from '@app/modules/characters/characters.service';
 import { HomeMembershipService } from '@app/modules/home/home-membership.service';
 import { HomePolicyService } from '@app/modules/home/home-policy.service';
 import { HomePresenceService } from '@app/modules/home/home-presence.service';
@@ -39,7 +40,14 @@ describe('Home concurrency (DB)', () => {
       assertAllowed: jest.fn(),
     } as unknown as RateLimitService;
 
-    homes = new HomeService(prisma, fanout, presence, voice);
+    const characters = {
+      resolveCharacter: (characterId: string) => ({
+        definition: { id: characterId },
+        loadout: { characterId, accessoryIds: [] },
+      }),
+    } as unknown as CharactersService;
+
+    homes = new HomeService(prisma, fanout, presence, voice, characters);
     memberships = new HomeMembershipService(
       prisma,
       homes,
